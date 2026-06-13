@@ -1,19 +1,63 @@
 const std = @import("std");
 const linux = std.os.linux;
-const fd = linux.fd_t;
+const print = std.debug.print;
 
-const socket_error = error {
-    CouldntCreateSocket
-};
+/// get a non-blocking TCP socket
+pub fn get_socket(addr: *const std.Io.net.IpAddress) !linux.fd_t {
+    var rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
 
-pub fn get_socket() !std.os.linux.fd_t {
-    const res = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
-
-    if (linux.errno(res) != .SUCCESS) {
-        return error.socket_error;
+    switch (linux.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| {
+            std.log.err("socket error: {}", .{err});
+            return error.SocketError;
+        },
     }
-    const socket: std.os.linux.fd_t = @intCast(res);
 
-    return ;
+    const socket: linux.fd_t = @intCast(rc);
+
+    const val: u32 = 1;
+
+    std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&val)) catch |err| {
+        std.log.err("setsockopt error {}", .{err});
+        return err;
+    };
+
+    try set_non_blocking(socket);
+
+    const sockaddr: linux.sockaddr.in = .{ .addr = std.mem.readInt(u32, &addr.ip4.bytes, .little), .port = std.mem.nativeToBig(u16, addr.ip4.port) };
+    const socklen: u32 = @sizeOf(linux.sockaddr.in);
+    rc = linux.bind(socket, @ptrCast(&sockaddr), socklen);
+
+    switch (linux.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| {
+            std.log.err("bind error: {}", .{err});
+            return error.BindError;
+        },
+    }
+
+    return socket;
 }
 
+fn set_non_blocking(socket: linux.fd_t) !void {
+    const socket_flags = linux.fcntl(socket, linux.F.GETFL, 0);
+    switch (linux.errno(socket_flags)) {
+        .SUCCESS => {},
+        else => |err| {
+            std.log.err("fcntl get error: {}", .{err});
+            return error.FcntlGetError;
+        },
+    }
+
+    const non_block_flag: u32 = @bitCast(linux.O{ .NONBLOCK = true });
+
+    const rc = linux.fcntl(socket, linux.F.SETFL, socket_flags | @as(usize, non_block_flag));
+    switch (linux.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| {
+            std.log.err("fcntl set error: {}", .{err});
+            return error.FcntlSetError;
+        },
+    }
+}
