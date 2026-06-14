@@ -40,7 +40,8 @@ pub const Server = struct {
 
         if (opt.nonblock) try set_non_blocking(socket);
 
-        const sockaddr: linux.sockaddr.in = .{ .addr = std.mem.readInt(u32, &addr.ip4.bytes, .little), .port = std.mem.nativeToBig(u16, addr.ip4.port) };
+        const ip_adrr_little: u32 = std.mem.readInt(u32, &addr.ip4.bytes, .little);
+        const sockaddr: linux.sockaddr.in = .{ .addr = ip_adrr_little, .port = std.mem.nativeToBig(u16, addr.ip4.port) };
         rc = linux.bind(socket, @ptrCast(&sockaddr), @sizeOf(linux.sockaddr.in));
 
         try check("bind", rc);
@@ -74,7 +75,6 @@ pub const Server = struct {
             utils.print_sockaddr("new connection from ", &client_addr);
 
             const client_fd: linux.fd_t = @intCast(rc);
-            defer utils.close_fd(client_fd);
             handler.handle_connections(self.allocator, client_fd) catch |err| {
                 std.log.err("error when handling connection {}", .{err});
             };

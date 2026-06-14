@@ -100,7 +100,7 @@ pub fn build(b: *std.Build) void {
     // As you can see we are re-defining the same executable but
     // we're binding it to a dedicated build step.
     const server_exe_check = b.addExecutable(.{
-        .name = "blitz",
+        .name = "blitz-server",
         .root_module = mod,
     });
     // There is no `b.installArtifact(exe_check);` here.

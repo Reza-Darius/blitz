@@ -7,9 +7,11 @@ const fd = linux.fd_t;
 const info = std.log.info;
 const Allocator = std.mem.Allocator;
 
-const CON_BUF_SIZE = 200;
+const CON_BUF_SIZE = 500;
 
 pub fn handle_connections(alloc: Allocator, conn_fd: fd) !void {
+    defer utils.close_fd(conn_fd);
+
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
 
