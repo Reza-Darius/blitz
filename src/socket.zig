@@ -4,6 +4,7 @@ const handler = @import("handler.zig");
 
 const linux = std.os.linux;
 const print = std.debug.print;
+const check = utils.check_syscall;
 
 pub const Server = struct {
     socket: linux.fd_t,
@@ -25,13 +26,7 @@ pub const Server = struct {
             .UDP => linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0),
         };
 
-        switch (linux.errno(rc)) {
-            .SUCCESS => {},
-            else => |err| {
-                std.log.err("socket error: {}", .{err});
-                return error.SocketError;
-            },
-        }
+        try check("socket", rc);
 
         const socket: linux.fd_t = @intCast(rc);
 
@@ -48,22 +43,11 @@ pub const Server = struct {
         const sockaddr: linux.sockaddr.in = .{ .addr = std.mem.readInt(u32, &addr.ip4.bytes, .little), .port = std.mem.nativeToBig(u16, addr.ip4.port) };
         rc = linux.bind(socket, @ptrCast(&sockaddr), @sizeOf(linux.sockaddr.in));
 
-        switch (linux.errno(rc)) {
-            .SUCCESS => {},
-            else => |err| {
-                std.log.err("bind error: {}", .{err});
-                return error.BindError;
-            },
-        }
+        try check("bind", rc);
 
         rc = linux.listen(socket, 1024);
-        switch (linux.errno(rc)) {
-            .SUCCESS => {},
-            else => |err| {
-                std.log.err("listen error: {}", .{err});
-                return error.ListenError;
-            },
-        }
+        try check("listen", rc);
+
         return .{
             .socket = socket,
             .addr = addr,
@@ -82,13 +66,10 @@ pub const Server = struct {
             var addrlen: linux.socklen_t = @sizeOf(linux.sockaddr.in);
             const rc = std.os.linux.accept(self.socket, @ptrCast(&client_addr), &addrlen);
 
-            switch (linux.errno(rc)) {
-                .SUCCESS => {},
-                else => |err| {
-                    std.log.err("accept error: {}", .{err});
-                    break;
-                },
-            }
+            // we might want to react to different errors here
+            check("accept", rc) catch {
+                continue;
+            };
 
             utils.print_sockaddr("new connection from ", &client_addr);
 
@@ -103,21 +84,11 @@ pub const Server = struct {
 
 fn set_non_blocking(socket: linux.fd_t) !void {
     const socket_flags = linux.fcntl(socket, linux.F.GETFL, 0);
-    switch (linux.errno(socket_flags)) {
-        .SUCCESS => {},
-        else => |err| {
-            std.log.err("fcntl get error: {}", .{err});
-            return error.FcntlGetError;
-        },
-    }
+
+    try check("fcntl get", socket_flags);
 
     const non_block_flag: u32 = @bitCast(linux.O{ .NONBLOCK = true });
     const rc = linux.fcntl(socket, linux.F.SETFL, socket_flags | @as(usize, non_block_flag));
-    switch (linux.errno(rc)) {
-        .SUCCESS => {},
-        else => |err| {
-            std.log.err("fcntl set error: {}", .{err});
-            return error.FcntlSetError;
-        },
-    }
+
+    try check("fcntl set", rc);
 }
