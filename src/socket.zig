@@ -2,9 +2,20 @@ const std = @import("std");
 const linux = std.os.linux;
 const print = std.debug.print;
 
+pub const SockOptions = struct {
+    socket_type: SockType,
+    blocking: bool = true,
+    reuse_addr: bool = true,
+
+    const SockType = enum { TCP, UDP };
+};
+
 /// get a non-blocking TCP socket
-pub fn get_socket(addr: *const std.Io.net.IpAddress) !linux.fd_t {
-    var rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
+pub fn get_socket(addr: *const std.Io.net.IpAddress, opt: SockOptions) !linux.fd_t {
+    var rc = switch (opt.socket_type) {
+        .TCP => linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0),
+        .UDP => linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0),
+    };
 
     switch (linux.errno(rc)) {
         .SUCCESS => {},
@@ -15,7 +26,6 @@ pub fn get_socket(addr: *const std.Io.net.IpAddress) !linux.fd_t {
     }
 
     const socket: linux.fd_t = @intCast(rc);
-
     const val: u32 = 1;
 
     std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&val)) catch |err| {
@@ -23,11 +33,10 @@ pub fn get_socket(addr: *const std.Io.net.IpAddress) !linux.fd_t {
         return err;
     };
 
-    try set_non_blocking(socket);
+    if (opt.blocking) try set_non_blocking(socket);
 
     const sockaddr: linux.sockaddr.in = .{ .addr = std.mem.readInt(u32, &addr.ip4.bytes, .little), .port = std.mem.nativeToBig(u16, addr.ip4.port) };
-    const socklen: u32 = @sizeOf(linux.sockaddr.in);
-    rc = linux.bind(socket, @ptrCast(&sockaddr), socklen);
+    rc = linux.bind(socket, @ptrCast(&sockaddr), @sizeOf(linux.sockaddr.in));
 
     switch (linux.errno(rc)) {
         .SUCCESS => {},
@@ -36,7 +45,6 @@ pub fn get_socket(addr: *const std.Io.net.IpAddress) !linux.fd_t {
             return error.BindError;
         },
     }
-
     return socket;
 }
 
@@ -51,7 +59,6 @@ fn set_non_blocking(socket: linux.fd_t) !void {
     }
 
     const non_block_flag: u32 = @bitCast(linux.O{ .NONBLOCK = true });
-
     const rc = linux.fcntl(socket, linux.F.SETFL, socket_flags | @as(usize, non_block_flag));
     switch (linux.errno(rc)) {
         .SUCCESS => {},
