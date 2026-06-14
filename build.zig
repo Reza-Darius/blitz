@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
-    const exe = b.addExecutable(.{
+    const server_exe = b.addExecutable(.{
         .name = "blitz-server",
         .root_module = b.createModule(.{
             // b.createModule defines a new module just like b.addModule but,
@@ -83,21 +83,33 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const client_exe = b.addExecutable( .{
-        .name = "blitz-client",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/bin/client.zig"),
-            .target = target,
-            .optimize = optimize,
-        })
-    });
+    const client_exe = b.addExecutable(.{ .name = "blitz-client", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/bin/client.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
-    b.installArtifact(exe);
+    b.installArtifact(server_exe);
     b.installArtifact(client_exe);
+
+    // This is where the interesting part begins.
+    // As you can see we are re-defining the same executable but
+    // we're binding it to a dedicated build step.
+    const server_exe_check = b.addExecutable(.{
+        .name = "blitz",
+        .root_module = mod,
+    });
+    // There is no `b.installArtifact(exe_check);` here.
+
+    // Finally we add the "check" step which will be detected
+    // by ZLS and automatically enable Build-On-Save.
+    // If you copy this into your `build.zig`, make sure to rename 'foo'
+    const check = b.step("check", "Check if blitz compiles");
+    check.dependOn(&server_exe_check.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -112,7 +124,7 @@ pub fn build(b: *std.Build) void {
     // or if another step depends on it, so it's up to you to define when and
     // how this Run step will be executed. In our case we want to run it when
     // the user runs `zig build run`, so we create a dependency link.
-    const run_cmd = b.addRunArtifact(exe);
+    const run_cmd = b.addRunArtifact(server_exe);
     run_step.dependOn(&run_cmd.step);
 
     // By making the run step depend on the default step, it will be run from the
@@ -139,7 +151,7 @@ pub fn build(b: *std.Build) void {
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
+        .root_module = server_exe.root_module,
     });
 
     // A run step that will run the second test executable.

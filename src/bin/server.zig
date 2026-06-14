@@ -18,6 +18,6 @@ pub fn main(init: std.process.Init) !void {
         std.log.info("arg: {s}", .{arg});
         addr = try .parseLiteral(arg);
     }
-
-    try blitz.run_server(gpa, addr);
+    var server = try blitz.Server.init(gpa, addr, .{ .socket_type = .TCP, .reuse_addr = true, .nonblock = false });
+    try server.run();
 }
