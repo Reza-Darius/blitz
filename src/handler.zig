@@ -10,6 +10,9 @@ pub fn handle_connections(alloc: Allocator, conn_fd: fd) !void {
     defer alloc.free(buf);
 
     const bytes_read  = try posix.read(conn_fd, buf);
+
     info("bytes read: {}", .{bytes_read});
+    info("buf: {s}", .{buf});
+
     return;
 }

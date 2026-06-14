@@ -83,11 +83,21 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const client_exe = b.addExecutable( .{
+        .name = "blitz-client",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bin/client.zig"),
+            .target = target,
+            .optimize = optimize,
+        })
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
+    b.installArtifact(client_exe);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).

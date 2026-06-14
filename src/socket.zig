@@ -4,13 +4,13 @@ const print = std.debug.print;
 
 pub const SockOptions = struct {
     socket_type: SockType,
-    blocking: bool = true,
+    nonblock: bool = true,
     reuse_addr: bool = true,
 
     const SockType = enum { TCP, UDP };
 };
 
-/// get a non-blocking TCP socket
+/// get a non-blocking TCP socket for listening
 pub fn get_socket(addr: *const std.Io.net.IpAddress, opt: SockOptions) !linux.fd_t {
     var rc = switch (opt.socket_type) {
         .TCP => linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0),
@@ -26,14 +26,16 @@ pub fn get_socket(addr: *const std.Io.net.IpAddress, opt: SockOptions) !linux.fd
     }
 
     const socket: linux.fd_t = @intCast(rc);
-    const val: u32 = 1;
 
-    std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&val)) catch |err| {
-        std.log.err("setsockopt error {}", .{err});
-        return err;
-    };
+    if (opt.reuse_addr) {
+        const val: u32 = 1;
+        std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&val)) catch |err| {
+            std.log.err("setsockopt error {}", .{err});
+            return err;
+        };
+    }
 
-    if (opt.blocking) try set_non_blocking(socket);
+    if (opt.nonblock) try set_non_blocking(socket);
 
     const sockaddr: linux.sockaddr.in = .{ .addr = std.mem.readInt(u32, &addr.ip4.bytes, .little), .port = std.mem.nativeToBig(u16, addr.ip4.port) };
     rc = linux.bind(socket, @ptrCast(&sockaddr), @sizeOf(linux.sockaddr.in));
