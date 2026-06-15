@@ -83,10 +83,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const client_exe = b.addExecutable(.{ .name = "blitz-client", .root_module = b.createModule(.{
+    const client_exe = b.addExecutable(.{
+        .name = "blitz-client",
+        .root_module = b.createModule(.{
         .root_source_file = b.path("src/bin/client.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{.name = "blitz", .module = mod}
+        }
     }) });
 
     // This declares intent for the executable to be installed into the
@@ -96,21 +101,6 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(server_exe);
     b.installArtifact(client_exe);
 
-    // ZLS CONFIG
-
-    const server_exe_check = b.addExecutable(.{
-        .name = "blitz-server-check",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/bin/server.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "blitz", .module = mod },
-            },
-        }),
-    });
-    const check = b.step("check", "Check if blitz compiles");
-    check.dependOn(&server_exe_check.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -176,4 +166,34 @@ pub fn build(b: *std.Build) void {
     //
     // Lastly, the Zig build system is relatively simple and self-contained,
     // and reading its source code will allow you to master it.
+
+    // ZLS CONFIG
+
+    const server_exe_check = b.addExecutable(.{
+        .name = "server_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bin/server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "blitz", .module = mod },
+            },
+        }),
+    });
+    const client_exe_check = b.addExecutable(.{
+        .name = "client-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bin/client.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "blitz", .module = mod },
+            },
+        }),
+    });
+    const check = b.step("check", "Check if blitz compiles");
+    check.dependOn(&server_exe_check.step);
+    check.dependOn(&client_exe_check.step);
+    check.dependOn(&mod_tests.step);
+    check.dependOn(&exe_tests.step);
 }

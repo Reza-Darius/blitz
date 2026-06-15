@@ -1,4 +1,5 @@
 const std = @import("std");
+const blitz = @import("blitz");
 
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
@@ -17,11 +18,17 @@ pub fn main(init: std.process.Init) !void {
         addr = try .parseLiteral(arg);
     }
 
+    const msg = "hello from the client";
+    var encoded_msg = blitz.Message.init(arena);
+    defer encoded_msg.deinit();
+    try encoded_msg.encode_string(msg);
+    encoded_msg.print();
+
     const con = try addr.connect(io, .{.mode = .stream});
     defer con.close(io);
 
     std.log.info("connected to {}\n", .{addr});
 
     var writer = con.writer(io, &.{});
-    try writer.interface.writeAll("hello from the client!");
+    try encoded_msg.write(&writer.interface);
 }

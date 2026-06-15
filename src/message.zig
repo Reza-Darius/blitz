@@ -1,4 +1,8 @@
 const std = @import("std");
+const utils = @import("utils.zig");
+
+const linux = std.os.linux;
+const posix = std.posix;
 
 const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage };
 
@@ -44,25 +48,49 @@ pub const Message = struct {
         return;
     }
 
-    pub fn debug_print(self: Message) void {
-        std.debug.print("len: {}, message: {s}", .{ self.header().len, self.data[HDR_SIZE .. HDR_SIZE + self.data.len] });
+    pub fn print(self: Message) void {
+        const hdr = self.header() catch unreachable;
+        std.debug.print("len: {}, message: {s}\n", .{ hdr.tot_len, self.data[HDR_SIZE..hdr.tot_len] });
         return;
     }
 
     pub fn encode_string(self: *Message, str: []const u8) MessageError!void {
-        if (str.len > MAX_MSG_LEN) {
+        if (str.len + HDR_SIZE > MAX_MSG_LEN) {
             return error.EncodeError;
         }
 
-        var buf = self.allocator.alloc(u8, str.len + 2) catch {
+        const hdr: Header = .{
+            .tot_len = HDR_SIZE + @as(u16, @intCast(str.len)),
+        };
+
+        self.data = self.allocator.alloc(u8, hdr.tot_len) catch {
             return error.AllocationError;
         };
 
-        self.data = buf;
-        self.write_header(&.{ .tot_len = @as(u16, @intCast(str.len)) + HDR_SIZE });
+        self.write_header(&hdr);
 
-        @memcpy(buf[HDR_SIZE .. str.len + HDR_SIZE], str);
+        @memcpy(self.data[HDR_SIZE..hdr.tot_len], str);
 
+        return;
+    }
+
+    pub fn read_from_socket(self: *Message, socket: linux.fd_t) !void {
+        var hdr: Header = undefined;
+        try utils.read_socket(socket, std.mem.asBytes(&hdr));
+
+        if (hdr.tot_len < 3) {
+            return error.InvalidMessage;
+        }
+
+        self.data = try self.allocator.alloc(u8, hdr.tot_len);
+        self.write_header(&hdr);
+        try utils.read_socket(socket, self.data[HDR_SIZE..hdr.tot_len]);
+
+        return;
+    }
+
+    pub fn write(self: Message, writer: *std.Io.Writer) !void {
+        try writer.writeAll(self.data);
         return;
     }
 };

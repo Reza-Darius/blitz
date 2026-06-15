@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const message = @import("message.zig");
 
 const linux = std.os.linux;
 const posix = std.posix;
@@ -13,14 +14,13 @@ pub fn handle_connections(alloc: Allocator, conn_fd: fd) !void {
     defer utils.close_fd(conn_fd);
 
     var arena = std.heap.ArenaAllocator.init(alloc);
+    const allocator = arena.allocator();
     defer arena.deinit();
 
-    const allocator = arena.allocator();
-    const buf = try allocator.alloc(u8, CON_BUF_SIZE);
+    var msg = message.Message.init(allocator);
+    try msg.read_from_socket(conn_fd);
 
-    try utils.read_socket(conn_fd, buf);
-
-    info("buf: {s}", .{buf});
+    msg.print();
 
     return;
 }
