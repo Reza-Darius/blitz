@@ -14,16 +14,20 @@ const warn = std.log.warn;
 
 const fd = sys.fd_t;
 const epoll_event = sys.epoll_event;
+const Allocator = std.mem.Allocator;
 
 const MAX_EV: u16 = 512;
+const CON_BUF_SIZE: u16 = 1024;
+const MAX_CON: u16 = 512;
 
 pub const Server = struct {
     listening_sock: fd,
     addr: std.Io.net.IpAddress,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
+    con_table: []*Connection,
 
     /// initializes a listening server
-    pub fn init(allocator: std.mem.Allocator, addr: std.Io.net.IpAddress, opt: so.SocketOptions) !Server {
+    pub fn init(allocator: Allocator, addr: std.Io.net.IpAddress, opt: so.SocketOptions) !Server {
         const socket = try so.get_socket(opt);
 
         const ip_adrr: u32 = std.mem.readInt(u32, &addr.ip4.bytes, .little);
@@ -39,6 +43,7 @@ pub const Server = struct {
             .listening_sock = socket,
             .addr = addr,
             .allocator = allocator,
+            .con_table = undefined,
         };
     }
 
@@ -67,6 +72,9 @@ pub const Server = struct {
 
         info("listening on {}", .{self.addr});
 
+        // number of open fds
+        var n_fds: u16 = 0;
+
         while (true) {
             // TODO: listen for signal for graceful shutdown
 
@@ -79,22 +87,38 @@ pub const Server = struct {
             debug("new event! n_ready = {}", .{n_ready});
 
             for (0..n_ready) |idx| {
-                if (ev_list[idx].data.fd == self.listening_sock) {
-                    // new client
+                const ev = ev_list[idx];
+                const con = self.con_table[@intCast(ev.data.fd)];
+
+                if (ev.events & (sys.EPOLL.HUP | sys.EPOLL.ERR) > 0) {
+                    const err_fd = ev.data.fd;
+
+                    if (err_fd == self.listening_sock) {
+                        l_err("listening socket error!", .{});
+                        break;
+                    }
+
+                    warn("fd error, or hang up {}", .{err_fd});
+                    n_fds -= 1;
+
+                    con.deinit();
+                    self.allocator.destroy(con);
+                }
+
+                if (ev.data.fd == self.listening_sock) {
                     debug("new client!", .{});
+
+                    accept_client(self.allocator, &n_fds, self.listening_sock, epoll_fd, self.con_table) catch |err| {
+                        warn("accept client error {}", .{err});
+                        continue;
+                    };
                 }
 
-                if (ev_list[idx].events & (sys.EPOLL.HUP | sys.EPOLL.ERR) > 0) {
-                    const err_fd = ev_list[idx].data.fd;
-                    warn("fd error {}", .{err_fd});
-                    utils.close_fd(err_fd);
-                }
-
-                if (ev_list[idx].events & sys.EPOLL.IN > 0) {
+                if (ev.events & sys.EPOLL.IN > 0) {
                     // fd has data for us to read
                 }
 
-                if (ev_list[idx].events & sys.EPOLL.OUT > 0) {
+                if (ev.events & sys.EPOLL.OUT > 0) {
                     // fd has data for us to write
                 }
             }
@@ -102,32 +126,75 @@ pub const Server = struct {
     }
 };
 
-fn accept_client(n_fds: usize, li_fd: fd, epoll_fd: fd) !void {
+fn accept_client(allocator: Allocator, n_fds: *u16, li_fd: fd, epoll_fd: fd, con_table: []*Connection) !void {
+    if (n_fds.* >= MAX_EV) {
+        warn("maximum connections reached, rejecting client", .{});
+        return error.MaxConnections;
+    }
+
     var client_addr: sys.sockaddr.in = undefined;
     var addrlen: sys.socklen_t = @sizeOf(sys.sockaddr.in);
-    const rc = sys.accept(li_fd, @ptrCast(&client_addr), &addrlen);
+    var rc = sys.accept(li_fd, @ptrCast(&client_addr), &addrlen);
 
-    // we might want to react to different errors here
     try check("accept", rc);
 
     const con_fd: fd = @intCast(rc);
-
-    if (n_fds >= MAX_EV) {
-        warn("maximum connections reached, rejecting client, fd={}", .{con_fd});
-        utils.close_fd(con_fd);
-        return;
-    }
-
-    utils.print_sockaddr("new connection from ", &client_addr);
+    errdefer utils.close_fd(con_fd);
 
     try so.set_fd_nonblock(con_fd);
 
     var event: epoll_event = undefined;
     event.data.fd = con_fd;
+    event.events = sys.EPOLL.IN;
+
+    const alloc = try allocator.create(Connection);
+    errdefer allocator.destroy(alloc);
+
+    alloc.* = try Connection.init(allocator, con_fd, &client_addr);
+    errdefer alloc.deinit();
 
     rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_ADD, con_fd, &event);
     try utils.check_syscall("epoll_creat1()", rc);
 
+    utils.print_sockaddr("new connection from ", &client_addr);
+
+    con_table[@intCast(alloc.fd)] = alloc;
+    n_fds.* += 1;
     return;
 }
 
+const Connection = struct {
+    state: ConState,
+    fd: fd,
+    addr: sys.sockaddr.in,
+    al: Allocator,
+
+    snd_buf: []u8,
+    rcv_buf: []u8,
+
+    const ConState = enum {
+        wants_read,
+        wants_write,
+    };
+
+    pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in) !Connection {
+        return .{
+            .state = .wants_read,
+            .fd = client_fd,
+            .addr = addr.*,
+            .al = allocator,
+            .snd_buf = try allocator.alloc(u8, CON_BUF_SIZE),
+            .rcv_buf = try allocator.alloc(u8, CON_BUF_SIZE),
+        };
+    }
+
+    pub fn deinit(self: *Connection) void {
+        self.al.free(self.snd_buf);
+        self.al.free(self.rcv_buf);
+        utils.close_fd(self.fd);
+        return;
+    }
+
+    pub fn handle_read(_: *Connection) void {}
+    pub fn handle_write(_: *Connection) void {}
+};
