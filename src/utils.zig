@@ -1,9 +1,9 @@
 const std = @import("std");
-const linux = std.os.linux;
+const sys = std.os.linux;
 
-pub fn close_fd(fd: linux.fd_t) void {
-    const rc = linux.close(fd);
-    switch (linux.errno(rc)) {
+pub fn close_fd(fd: sys.fd_t) void {
+    const rc = sys.close(fd);
+    switch (sys.errno(rc)) {
         .SUCCESS => {},
         else => |err| {
             std.log.err("close error: {}", .{err});
@@ -11,7 +11,7 @@ pub fn close_fd(fd: linux.fd_t) void {
     }
 }
 
-pub fn print_sockaddr(msg: []const u8, sockaddr: *linux.sockaddr.in) void {
+pub fn print_sockaddr(msg: []const u8, sockaddr: *sys.sockaddr.in) void {
     const ip_bytes = std.mem.asBytes(&sockaddr.addr);
     const port = std.mem.bigToNative(u16, sockaddr.port);
 
@@ -21,45 +21,53 @@ pub fn print_sockaddr(msg: []const u8, sockaddr: *linux.sockaddr.in) void {
 }
 
 /// reads bytes into the slice
-pub fn read_socket(socket: linux.fd_t, buf: []u8) !void {
+pub fn read_socket(socket: sys.fd_t, buf: []u8) !void {
     var idx: usize = 0;
     var read_bytes: usize = 0;
 
     while (idx < buf.len) {
-        const rc = linux.read(socket, buf.ptr + idx, buf.len - idx);
-        switch (linux.errno(rc)) {
+        const rc = sys.read(socket, buf.ptr + idx, buf.len - idx);
+        switch (sys.errno(rc)) {
             .SUCCESS => read_bytes = rc,
+            .AGAIN => continue,
             else => |err| {
                 std.log.err("read error {}", .{err});
                 return error.ReadError;
             },
         }
+
+        // EOF or disconnected
         if (read_bytes == 0) return;
+
         idx += read_bytes;
     }
 }
 
 /// attempts to write the entire slice
-pub fn write_socket(socket: linux.fd_t, buf: []const u8) !void {
+pub fn write_socket(socket: sys.fd_t, buf: []const u8) !void {
     var idx: usize = 0;
     var written_bytes: usize = 0;
 
     while (idx < buf.len) {
-        const rc = linux.write(socket, buf.ptr + idx, buf.len - idx);
-        switch (linux.errno(rc)) {
+        const rc = sys.write(socket, buf.ptr + idx, buf.len - idx);
+        switch (sys.errno(rc)) {
             .SUCCESS => written_bytes = rc,
+            .AGAIN => continue,
             else => |err| {
                 std.log.err("write error {}", .{err});
                 return error.WriteError;
             },
         }
+
+        // EOF or disconnected
         if (written_bytes == 0) return;
+
         idx += written_bytes;
     }
 }
 
 pub fn check_syscall(context: []const u8, rc: usize) !void {
-    switch (linux.errno(rc)) {
+    switch (sys.errno(rc)) {
         .SUCCESS => {},
         else => |err| {
             std.log.err("{s} error {}", .{ context, err });

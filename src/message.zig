@@ -1,7 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 
-const linux = std.os.linux;
+const sys = std.os.linux;
 const posix = std.posix;
 
 const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage };
@@ -30,15 +30,17 @@ pub const Message = struct {
         return;
     }
 
-    pub fn header(self: Message) MessageError!Header {
+    pub fn header(self: Message) MessageError!*Header {
         if (self.data.len == 0) {
             return error.EmptyMessage;
         }
-        const slice = self.data[0..HDR_SIZE];
-        const len = std.mem.readInt(u16, slice, .little);
-        return .{
-            .tot_len = len,
-        };
+        const hdr: *Header = @ptrCast(@alignCast(self.data[0..HDR_SIZE]));
+        return hdr;
+        // const slice = self.data[0..HDR_SIZE];
+        // const len = std.mem.readInt(u16, slice, .little);
+        // return .{
+        //     .tot_len = len,
+        // };
     }
 
     fn write_header(self: *Message, hdr: *const Header) void {
@@ -73,7 +75,7 @@ pub const Message = struct {
         return;
     }
 
-    pub fn read_from_socket(self: *Message, socket: linux.fd_t) !void {
+    pub fn read_from_socket(self: *Message, socket: sys.fd_t) !void {
         var hdr: Header = undefined;
         try utils.read_socket(socket, std.mem.asBytes(&hdr));
 
