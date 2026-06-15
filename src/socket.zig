@@ -21,10 +21,12 @@ pub const Server = struct {
 
     /// initializes a listening server
     pub fn init(allocator: std.mem.Allocator, addr: std.Io.net.IpAddress, opt: SockOptions) !Server {
-        var rc = switch (opt.socket_type) {
-            .TCP => linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0),
-            .UDP => linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0),
+        const sock_type: u32 = switch (opt.socket_type) {
+            .TCP => linux.SOCK.STREAM,
+            .UDP => linux.SOCK.DGRAM,
         };
+
+        var rc = linux.socket(linux.AF.INET, sock_type, 0);
 
         try check("socket", rc);
 
@@ -74,8 +76,8 @@ pub const Server = struct {
 
             utils.print_sockaddr("new connection from ", &client_addr);
 
-            const client_fd: linux.fd_t = @intCast(rc);
-            handler.handle_connections(self.allocator, client_fd) catch |err| {
+            const con_fd: linux.fd_t = @intCast(rc);
+            handler.handle_connections(self.allocator, con_fd) catch |err| {
                 std.log.err("error when handling connection {}", .{err});
             };
         }

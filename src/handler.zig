@@ -1,6 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const message = @import("message.zig");
+const Message = @import("message.zig").Message;
 
 const linux = std.os.linux;
 const posix = std.posix;
@@ -17,7 +17,7 @@ pub fn handle_connections(alloc: Allocator, conn_fd: fd) !void {
     const allocator = arena.allocator();
     defer arena.deinit();
 
-    var msg = message.Message.init(allocator);
+    var msg = Message.init(allocator);
     try msg.read_from_socket(conn_fd);
 
     msg.print();

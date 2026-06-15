@@ -6,13 +6,12 @@ const posix = std.posix;
 
 const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage };
 
-const MAX_MSG_LEN = 512;
-
 pub const Message = struct {
     data: []u8,
     allocator: std.mem.Allocator,
 
     const HDR_SIZE: u16 = @sizeOf(Header);
+    const MAX_MSG_LEN = 512;
 
     pub const Header = packed struct {
         /// total length of the message
