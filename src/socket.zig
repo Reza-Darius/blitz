@@ -40,8 +40,8 @@ pub const Server = struct {
 
         if (opt.nonblock) try set_non_blocking(socket);
 
-        const ip_adrr_little: u32 = std.mem.readInt(u32, &addr.ip4.bytes, .little);
-        const sockaddr: linux.sockaddr.in = .{ .addr = ip_adrr_little, .port = std.mem.nativeToBig(u16, addr.ip4.port) };
+        const ip_adrr: u32 = std.mem.readInt(u32, &addr.ip4.bytes, .little);
+        const sockaddr: linux.sockaddr.in = .{ .addr = ip_adrr, .port = std.mem.nativeToBig(u16, addr.ip4.port) };
         rc = linux.bind(socket, @ptrCast(&sockaddr), @sizeOf(linux.sockaddr.in));
 
         try check("bind", rc);

@@ -96,18 +96,19 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(server_exe);
     b.installArtifact(client_exe);
 
-    // This is where the interesting part begins.
-    // As you can see we are re-defining the same executable but
-    // we're binding it to a dedicated build step.
-    const server_exe_check = b.addExecutable(.{
-        .name = "blitz-server",
-        .root_module = mod,
-    });
-    // There is no `b.installArtifact(exe_check);` here.
+    // ZLS CONFIG
 
-    // Finally we add the "check" step which will be detected
-    // by ZLS and automatically enable Build-On-Save.
-    // If you copy this into your `build.zig`, make sure to rename 'foo'
+    const server_exe_check = b.addExecutable(.{
+        .name = "blitz-server-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bin/server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "blitz", .module = mod },
+            },
+        }),
+    });
     const check = b.step("check", "Check if blitz compiles");
     check.dependOn(&server_exe_check.step);
 
