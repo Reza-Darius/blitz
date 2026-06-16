@@ -66,6 +66,7 @@ pub fn write_socket(socket: sys.fd_t, buf: []const u8) !void {
     }
 }
 
+/// checks the return code
 pub fn check_syscall(context: []const u8, rc: usize) !void {
     switch (sys.errno(rc)) {
         .SUCCESS => {},
@@ -75,3 +76,51 @@ pub fn check_syscall(context: []const u8, rc: usize) !void {
         },
     }
 }
+
+pub const Buf = struct {
+    data: []u8,
+    len: usize,
+    al: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, cap: usize) !Buf {
+        const data = try allocator.alloc(u8, cap);
+        return .{
+            .data = data,
+            .len = 0,
+            .al = allocator,
+        };
+    }
+
+    /// doesnt grow the buffer and errors if the cap would be exceeded
+    pub fn append(self: *Buf, data: []u8) !void {
+        if (data.len + self.len > self.data.len) {
+            return error.CapOverflow;
+        }
+        @memcpy(self.data[self.len..self.data.len], data);
+        return;
+    }
+
+    /// /// elem must be a pointer
+    /// pub fn push(self: *Buf, elem: anytype) !void {
+    ///     const bytes: []u8 = std.mem.asBytes(elem);
+    ///     try self.append(bytes);
+    ///     return;
+    /// }
+
+    pub fn get(self: Buf) ?[]u8 {
+        if (self.len == 0) {
+            return null;
+        }
+        return self.data[0..self.len];
+    }
+
+    pub fn clear(self: *Buf) void {
+        self.len = 0;
+        return;
+    }
+
+    pub fn deinit(self: Buf) void {
+        self.al.free(self.data);
+        return;
+    }
+};

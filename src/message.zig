@@ -6,73 +6,94 @@ const posix = std.posix;
 
 const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage };
 
+const HDR_SIZE = @sizeOf(Header);
+const MAX_MSG_LEN = 512;
+const PAYLOAD_MIN_SIZE = 1;
+
+pub const Header = packed struct(u24) {
+    version: Version,
+    cmd: CMD,
+    pay_len: u16,
+};
+
+pub const CMD = enum(u6) {
+    Set,
+    Retrieve,
+    Msg,
+};
+
+pub const Version = enum(u2) { V1 = 0 };
+
 pub const Message = struct {
-    data: []u8,
-    allocator: std.mem.Allocator,
+    data: [*]u8,
 
-    const HDR_SIZE: u16 = @sizeOf(Header);
-    const MAX_MSG_LEN = 512;
-
-    pub const Header = packed struct {
-        /// total length of the message
-        tot_len: u16,
-    };
-
-    pub fn init(allocator: std.mem.Allocator) Message {
-        return .{
-            .data = undefined,
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: Message) void {
-        self.allocator.free(self.data);
-        return;
-    }
-
-    pub fn header(self: Message) MessageError!*Header {
-        if (self.data.len == 0) {
-            return error.EmptyMessage;
+    pub fn try_parse(data: []u8) MessageError!Message {
+        if (data.len < HDR_SIZE + PAYLOAD_MIN_SIZE) {
+            return error.InvalidDataLen;
         }
-        const hdr: *Header = @ptrCast(@alignCast(self.data[0..HDR_SIZE]));
-        return hdr;
-        // const slice = self.data[0..HDR_SIZE];
-        // const len = std.mem.readInt(u16, slice, .little);
-        // return .{
-        //     .tot_len = len,
-        // };
+
+        const hdr: *Header = try parse_header(data);
+
+        if (hdr.pay_len + HDR_SIZE > data.len) {
+            std.log.err("message incomplete, bytes missing: {}", .{hdr.pay_len - data.len - HDR_SIZE});
+            return error.IncompleteMessage;
+        }
+        return .{ .data = data.ptr };
     }
 
-    fn write_header(self: *Message, hdr: *const Header) void {
-        std.debug.assert(hdr.tot_len != 0);
-        @memcpy(self.data[0..HDR_SIZE], std.mem.asBytes(hdr));
+    fn parse_header(data: []u8) MessageError!*Header {
+        if (data.len < HDR_SIZE) {
+            std.log.err("invalid data size for parsing header", .{});
+            return error.HeaderParseError;
+        }
+        const hdr: *Header = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
+
+        if (hdr.pay_len < PAYLOAD_MIN_SIZE) {
+            std.log.err("invalid pay_len {}", .{hdr.pay_len});
+            return error.HeaderParseError;
+        }
+        return hdr;
+    }
+
+    fn write_header(out: []u8, hdr: *const Header) void {
+        std.debug.assert(out.len >= HDR_SIZE);
+        std.debug.assert(hdr.pay_len != 0);
+
+        @memcpy(out[0..HDR_SIZE], std.mem.asBytes(hdr));
         return;
+    }
+
+    /// doesnt do any checks
+    pub fn header(self: Message) *Header {
+        return @ptrCast(@alignCast(self.data[0..HDR_SIZE]));
     }
 
     pub fn print(self: Message) void {
-        const hdr = self.header() catch unreachable;
-        std.debug.print("len: {}, message: {s}\n", .{ hdr.tot_len, self.data[HDR_SIZE..hdr.tot_len] });
+        const hdr = self.header();
+        std.debug.print("version={}, cmd={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
         return;
     }
 
-    pub fn encode_string(self: *Message, str: []const u8) MessageError!void {
-        if (str.len + HDR_SIZE > MAX_MSG_LEN) {
+    pub fn encode_string(out: []u8, str: []const u8) MessageError!Message {
+        if (str.len > MAX_MSG_LEN) {
+            std.log.err("provided string exceeds max message length", .{});
+            return error.EncodeError;
+        }
+        if (str.len + HDR_SIZE > out.len) {
+            std.log.err("provided buffer is too small", .{});
             return error.EncodeError;
         }
 
         const hdr: Header = .{
-            .tot_len = HDR_SIZE + @as(u16, @intCast(str.len)),
+            .version = .V1,
+            .cmd = .Msg,
+            .pay_len = @as(u16, @intCast(str.len)),
         };
 
-        self.data = self.allocator.alloc(u8, hdr.tot_len) catch {
-            return error.AllocationError;
-        };
+        Message.write_header(out, &hdr);
+        @memcpy(out[HDR_SIZE .. HDR_SIZE + hdr.pay_len], str);
 
-        self.write_header(&hdr);
-
-        @memcpy(self.data[HDR_SIZE..hdr.tot_len], str);
-
-        return;
+        return .{ .data = out.ptr };
     }
 
     pub fn read_from_socket(self: *Message, socket: sys.fd_t) !void {
@@ -83,29 +104,32 @@ pub const Message = struct {
             return error.InvalidMessage;
         }
 
-        self.data = try self.allocator.alloc(u8, hdr.tot_len);
+        self.payload = try self.allocator.alloc(u8, hdr.tot_len);
         self.write_header(&hdr);
-        try utils.read_socket(socket, self.data[HDR_SIZE..hdr.tot_len]);
+        try utils.read_socket(socket, self.payload[HDR_SIZE..hdr.tot_len]);
 
         return;
     }
 
     pub fn write(self: Message, writer: *std.Io.Writer) !void {
-        try writer.writeAll(self.data);
+        const hdr = self.header();
+        const bytes = self.data[0 .. HDR_SIZE + hdr.pay_len];
+        try writer.writeAll(bytes);
         return;
     }
 };
 
 test "Message Encoding" {
     const allocator = std.testing.allocator;
+    const alloc = try allocator.alloc(u8, 10);
+    defer allocator.free(alloc);
+
     const message = "hello";
     try std.testing.expect(message.len == 5);
-    var encoded_msg = Message.init(allocator);
-    defer encoded_msg.deinit();
-    try encoded_msg.encode_string(message);
+    const encoded_msg = try Message.encode_string(alloc, message);
+    const header = encoded_msg.header();
 
-    try std.testing.expect(encoded_msg.data.len == 7);
-    try std.testing.expect(std.mem.eql(u8, encoded_msg.data[2 .. 2 + 5], message[0..5]));
-    const header = try encoded_msg.header();
-    try std.testing.expect(header.tot_len == 7);
+    try std.testing.expect(header.pay_len == message.len);
+    try std.testing.expect(std.mem.eql(u8, encoded_msg.data[HDR_SIZE .. HDR_SIZE + header.pay_len], message[0..5]));
+    encoded_msg.print();
 }

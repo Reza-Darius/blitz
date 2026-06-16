@@ -4,6 +4,7 @@ const handler = @import("handler.zig");
 const so = @import("socket.zig");
 
 const sys = std.os.linux;
+
 const print = std.debug.print;
 const check = utils.check_syscall;
 
@@ -21,26 +22,27 @@ const CON_BUF_SIZE: u16 = 1024;
 const MAX_CON: u16 = 512;
 
 pub const Server = struct {
-    listening_sock: fd,
+    li_sock: fd,
     addr: std.Io.net.IpAddress,
     allocator: Allocator,
     con_table: []*Connection,
 
     /// initializes a listening server
     pub fn init(allocator: Allocator, addr: std.Io.net.IpAddress, opt: so.SocketOptions) !Server {
-        const socket = try so.get_socket(opt);
+        const li_sock = try so.get_socket(opt);
+        errdefer utils.close_fd(li_sock);
 
         const ip_adrr: u32 = std.mem.readInt(u32, &addr.ip4.bytes, .little);
         const sockaddr: sys.sockaddr.in = .{ .addr = ip_adrr, .port = std.mem.nativeToBig(u16, addr.ip4.port) };
-        var rc = sys.bind(socket, @ptrCast(&sockaddr), @sizeOf(sys.sockaddr.in));
+        var rc = sys.bind(li_sock, @ptrCast(&sockaddr), @sizeOf(sys.sockaddr.in));
 
         try check("bind", rc);
 
-        rc = sys.listen(socket, 1024);
+        rc = sys.listen(li_sock, 1024);
         try check("listen", rc);
 
         return .{
-            .listening_sock = socket,
+            .li_sock = li_sock,
             .addr = addr,
             .allocator = allocator,
             .con_table = undefined,
@@ -49,7 +51,7 @@ pub const Server = struct {
 
     /// runs the main server loop
     pub fn run(self: *Server) !void {
-        defer utils.close_fd(self.listening_sock);
+        defer utils.close_fd(self.li_sock);
 
         // creat epoll() fd
         var rc = sys.epoll_create1(0);
@@ -60,10 +62,10 @@ pub const Server = struct {
         // set up event we are interested in
         var event: epoll_event = undefined;
         event.events = sys.EPOLL.IN;
-        event.data.fd = self.listening_sock;
+        event.data.fd = self.li_sock;
 
         // add listen socket to list
-        rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_ADD, self.listening_sock, &event);
+        rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_ADD, self.li_sock, &event);
         try utils.check_syscall("epoll_creat1()", rc);
 
         const ev_list = try self.allocator.alloc(epoll_event, MAX_EV);
@@ -78,10 +80,18 @@ pub const Server = struct {
         while (true) {
             // TODO: listen for signal for graceful shutdown
 
-            // TODO: check for EINTR rc
-
             // -1 for the timeout arguments causes epoll_wait() to block until an event occurs
             const n_ready = sys.epoll_wait(epoll_fd, ev_list.ptr, @intCast(MAX_EV), -1);
+            switch (sys.errno(n_ready)) {
+                .SUCCESS => {},
+                .INTR => {
+                    // TODO: handle interrupt
+                    continue;
+                },
+                else => |err| {
+                    l_err("epoll wait error {}", .{err});
+                },
+            }
             try utils.check_syscall("epoll_wait()", n_ready);
 
             debug("new event! n_ready = {}", .{n_ready});
@@ -93,7 +103,7 @@ pub const Server = struct {
                 if (ev.events & (sys.EPOLL.HUP | sys.EPOLL.ERR) > 0) {
                     const err_fd = ev.data.fd;
 
-                    if (err_fd == self.listening_sock) {
+                    if (err_fd == self.li_sock) {
                         l_err("listening socket error!", .{});
                         break;
                     }
@@ -105,10 +115,10 @@ pub const Server = struct {
                     self.allocator.destroy(con);
                 }
 
-                if (ev.data.fd == self.listening_sock) {
+                if (ev.data.fd == self.li_sock) {
                     debug("new client!", .{});
 
-                    accept_client(self.allocator, &n_fds, self.listening_sock, epoll_fd, self.con_table) catch |err| {
+                    accept_client(self.allocator, &n_fds, self.li_sock, epoll_fd, self.con_table) catch |err| {
                         warn("accept client error {}", .{err});
                         continue;
                     };
@@ -116,11 +126,15 @@ pub const Server = struct {
 
                 if (ev.events & sys.EPOLL.IN > 0) {
                     // fd has data for us to read
+                    try handle_read(con);
                 }
 
                 if (ev.events & sys.EPOLL.OUT > 0) {
                     // fd has data for us to write
+                    handle_write(con);
                 }
+
+                // adjust event flag here after operations?
             }
         }
     }
@@ -169,12 +183,13 @@ const Connection = struct {
     addr: sys.sockaddr.in,
     al: Allocator,
 
-    snd_buf: []u8,
-    rcv_buf: []u8,
+    snd_buf: utils.Buf,
+    rcv_buf: utils.Buf,
 
     const ConState = enum {
         wants_read,
         wants_write,
+        wants_close,
     };
 
     pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in) !Connection {
@@ -183,18 +198,60 @@ const Connection = struct {
             .fd = client_fd,
             .addr = addr.*,
             .al = allocator,
-            .snd_buf = try allocator.alloc(u8, CON_BUF_SIZE),
-            .rcv_buf = try allocator.alloc(u8, CON_BUF_SIZE),
+            .snd_buf = try utils.Buf.init(allocator, CON_BUF_SIZE),
+            .rcv_buf = try utils.Buf.init(allocator, CON_BUF_SIZE),
         };
     }
 
     pub fn deinit(self: *Connection) void {
-        self.al.free(self.snd_buf);
-        self.al.free(self.rcv_buf);
+        self.rcv_buf.deinit();
+        self.snd_buf.deinit();
         utils.close_fd(self.fd);
         return;
     }
-
-    pub fn handle_read(_: *Connection) void {}
-    pub fn handle_write(_: *Connection) void {}
 };
+
+pub fn handle_read(con: *Connection) !void {
+    const cap = con.rcv_buf.data.len - con.rcv_buf.len;
+    const buf: [*]u8 = con.rcv_buf.data.ptr + con.rcv_buf.len;
+    const rc = sys.read(con.fd, buf, cap);
+
+    switch (sys.errno(rc)) {
+        // socket shut down
+        .SUCCESS => {
+            con.state = .wants_close;
+        },
+        // wait for more data
+        .AGAIN => {
+            con.state = .wants_read;
+        },
+        else => |err| {
+            l_err("read error {}", .{err});
+            con.state = .wants_close;
+            return error.ConReadError;
+        },
+    }
+    con.rcv_buf.len += rc;
+    return;
+}
+pub fn handle_write(_: *Connection) void {
+    return;
+}
+
+test "alloc slice" {
+    const allocator = std.testing.allocator;
+    const allocation = try allocator.alloc(u8, 10);
+    defer allocator.free(allocation);
+    try std.testing.expect(allocation.len == 10);
+
+    const arr: [10]u8 = undefined;
+    try std.testing.expect(arr.len == 10);
+}
+
+test "double free" {
+    const allocator = std.testing.allocator;
+    const allocation = try allocator.alloc(u8, 10);
+
+    defer allocator.free(allocation);
+    defer allocator.free(allocation);
+}
