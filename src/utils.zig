@@ -98,11 +98,12 @@ pub const Buf = struct {
         if (data.len + self.len > self.data.len) {
             return error.CapOverflow;
         }
-        @memcpy(self.data[self.len..self.len + data.len], data);
+        @memcpy(self.data[self.len .. self.len + data.len], data);
         self.len += @intCast(data.len);
         return;
     }
 
+    /// gets a slice to the written data
     pub fn get(self: Buf) ?[]u8 {
         if (self.len == 0) {
             return null;
@@ -124,6 +125,7 @@ pub const Buf = struct {
         return self.len == self.lo;
     }
 
+    /// moves the lower index
     pub fn read_n(self: *Buf, n: u16) void {
         self.lo += n;
         std.debug.assert(self.lo <= self.len);

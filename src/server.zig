@@ -138,16 +138,20 @@ pub const Server = struct {
                 // change the fd interest based on connection state
                 switch (con.state) {
                     .wants_write => {
-                        try utils.epoll_mod(sys.EPOLL.OUT, con.fd, epoll_fd);
+                        if (ev.events & sys.EPOLL.OUT == 0) {
+                            try utils.epoll_mod(sys.EPOLL.OUT, con.fd, epoll_fd);
+                        }
                     },
                     .wants_read => {
-                        try utils.epoll_mod(sys.EPOLL.IN, con.fd, epoll_fd);
+                        if (ev.events & sys.EPOLL.IN == 0) {
+                            try utils.epoll_mod(sys.EPOLL.IN, con.fd, epoll_fd);
+                        }
                     },
                     .wants_close => {
                         n_fds -= 1;
                         con.deinit();
                         self.allocator.destroy(con);
-                        debug("closed connection: addr: {}, fd: {}, nfds {}", .{con.addr, ev.data.fd, n_fds});
+                        utils.print_sockaddr("closed connection: ", &con.addr);
                     },
                 }
             }
@@ -188,7 +192,6 @@ pub const Connection = struct {
         return;
     }
 };
-
 
 test "alloc slice" {
     const allocator = std.testing.allocator;

@@ -4,7 +4,18 @@ const utils = @import("utils.zig");
 const sys = std.os.linux;
 const posix = std.posix;
 
-const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage, InvalidDataLen, IncompleteMessage, HeaderParseError };
+const MessageError = error { 
+    ParseError,
+    EncodeError,
+    AllocationError,
+    EmptyMessage,
+    InvalidDataLen,
+    IncompleteMessage,
+    HeaderParseError,
+    InvalidVersion,
+    InvalidCommand,
+    InvalidMessageSize
+};
 
 const HDR_SIZE = @sizeOf(Header);
 const MAX_MSG_LEN = 512;
@@ -17,19 +28,24 @@ pub const Header = packed struct(u24) {
 };
 
 pub const CMD = enum(u6) {
-    Set,
-    Retrieve,
-    Msg,
+    Set = 0,
+    Retrieve = 1,
+    Msg = 2,
 };
 
-pub const Version = enum(u2) { V1 = 0 };
+const SUPPORTED_VERSION = Version.V1;
+
+pub const Version = enum(u2) {
+    V1 = 0,
+    _,
+};
 
 pub const Message = struct {
     data: [*]u8,
 
     pub fn try_parse(data: []u8) MessageError!Message {
         if (data.len < HDR_SIZE + PAYLOAD_MIN_SIZE) {
-            return error.InvalidDataLen;
+            return error.IncompleteMessage;
         }
 
         const hdr = try parse_header(data);
@@ -46,8 +62,18 @@ pub const Message = struct {
             std.log.err("invalid data size for parsing header", .{});
             return error.HeaderParseError;
         }
+
         const hdr = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
 
+        if (hdr.version != SUPPORTED_VERSION) {
+            return error.InvalidVersion;
+        }
+
+        _ = std.enums.fromInt(CMD, @intFromEnum(hdr.cmd)) orelse return error.InvalidCommand;
+
+        if (hdr.pay_len + HDR_SIZE > MAX_MSG_LEN) {
+            return error.InvalidMessageSize;
+        }
         if (hdr.pay_len < PAYLOAD_MIN_SIZE) {
             std.log.err("invalid pay_len {}", .{hdr.pay_len});
             return error.HeaderParseError;
@@ -134,7 +160,7 @@ pub const Message = struct {
     }
 
     pub fn len(self: Message) u16 {
-        return self.header().pay_len + HDR_SIZE;
+        return std.mem.readInt(u16, self.data[1..3], .little) + HDR_SIZE;
     }
 };
 

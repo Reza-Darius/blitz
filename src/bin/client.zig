@@ -10,8 +10,11 @@ pub fn main(init: std.process.Init) !void {
     if (arg_slice.len == 1) {
         return error.NoAddressProvided;
     }
+
+    const n_msgs = 3;
+
     const addr = try std.Io.net.IpAddress.parseLiteral(arg_slice[1]);
-    const write_buf = try arena.alloc(u8, 100);
+    const write_buf = try arena.alloc(u8, 200);
 
     var encoded_msg = try blitz.Message.encode_msg(write_buf, "hello from the client");
     encoded_msg.print();
@@ -22,12 +25,16 @@ pub fn main(init: std.process.Init) !void {
     std.log.info("connected to {}\n", .{addr});
 
     var writer = con.writer(io, &.{});
-    try encoded_msg.write(&writer.interface);
 
-    const read_buf = try arena.alloc(u8, 100);
-    var reader = con.reader(io, read_buf);
+    for (0..n_msgs) |_| {
+        try encoded_msg.write(&writer.interface);
+    }
 
-    const res = try reader.interface.readAlloc(arena, encoded_msg.len());
-    const resp_msg = try blitz.Message.try_parse(res);
-    resp_msg.print_info("got in response: ");
+    var reader = con.reader(io, &.{});
+
+    for (0..n_msgs) |_| {
+        const res = try reader.interface.readAlloc(arena, encoded_msg.len());
+        const resp_msg = try blitz.Message.try_parse(res);
+        resp_msg.print_info("got in response: ");
+    }
 }

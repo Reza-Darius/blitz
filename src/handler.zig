@@ -71,17 +71,6 @@ pub fn handle_read(con: *Connection) void {
                 con.state = .wants_close;
                 return;
             }
-
-            const msg = Message.try_parse(con.rcv_buf.get().?) catch |err| {
-                debug("couldnt parse message, waiting for more data, {}", .{err});
-                return;
-            };
-
-            msg.print_info("received message ");
-            con.rcv_buf.clear();
-            write_echo(con, &msg) catch |err| {
-                l_err("couldnt echo response, err {}", .{err});
-            };
         },
         .AGAIN => {
             // no data read, we wait for more
@@ -91,6 +80,35 @@ pub fn handle_read(con: *Connection) void {
             con.state = .wants_close;
             return;
         },
+    }
+
+    var read_buf: []u8 = con.rcv_buf.get().?;
+    var bytes_read: u16 = 0;
+
+    while (read_buf.len != 0) {
+        const msg = Message.try_parse(read_buf) catch |err| {
+            if (err == error.IncompleteMessage) {
+                debug("couldnt parse message, waiting for more data, {}", .{err});
+                break;
+            } else {
+                l_err("parse error {}", .{err});
+                return;
+            }
+        };
+
+        msg.print_info("received message ");
+        write_echo(con, &msg) catch |err| {
+            l_err("couldnt write echo response, err {}", .{err});
+        };
+
+        const read_bytes = msg.len();
+        bytes_read += read_bytes;
+        read_buf = read_buf[read_bytes..];
+    }
+
+    con.rcv_buf.read_n(bytes_read);
+    if (con.rcv_buf.is_empty()) {
+        con.rcv_buf.clear();
     }
 
     if (!con.snd_buf.is_empty()) {
