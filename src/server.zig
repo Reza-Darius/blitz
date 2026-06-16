@@ -19,9 +19,9 @@ const epoll_event = sys.epoll_event;
 const Allocator = std.mem.Allocator;
 const Message = message.Message;
 
-const MAX_EV: u16 = 512;
-const CON_BUF_SIZE: u16 = 1024;
-const MAX_CON: u16 = 512;
+pub const MAX_EV: u16 = 512;
+pub const CON_BUF_SIZE: u16 = 1024;
+pub const MAX_CON: u16 = 512;
 
 pub const Server = struct {
     li_sock: fd,
@@ -103,13 +103,10 @@ pub const Server = struct {
                 const con = con_table[@intCast(ev.data.fd)];
 
                 if (ev.data.fd == self.li_sock) {
-                    const new_con = accept_client(self.allocator, n_fds, self.li_sock, epoll_fd) catch |err| {
+                    const new_con = handler.accept_client(self.allocator, n_fds, self.li_sock, epoll_fd) catch |err| {
                         l_err("accept client error {}", .{err});
                         continue;
                     };
-                    // debug("fd {}", .{@as(usize, @intCast(new_con.fd))});
-                    // const ptr = con_table.ptr + @as(usize, @intCast(new_con.fd));
-                    // ptr[0] = new_con;
                     con_table[@intCast(new_con.fd)] = new_con;
                     n_fds += 1;
                     continue;
@@ -129,15 +126,16 @@ pub const Server = struct {
                 if (ev.events & sys.EPOLL.IN > 0) {
                     // fd has data for us to read
                     debug("pollin event, fd={}", .{ev.data.fd});
-                    handle_read(con);
+                    handler.handle_read(con);
                 }
 
                 if (ev.events & sys.EPOLL.OUT > 0) {
                     // fd has data for us to write
                     debug("pollout event, fd={}", .{ev.data.fd});
-                    handle_write(con);
+                    handler.handle_write(con);
                 }
 
+                // change the fd interest based on connection state
                 switch (con.state) {
                     .wants_write => {
                         try utils.epoll_mod(sys.EPOLL.OUT, con.fd, epoll_fd);
@@ -157,7 +155,7 @@ pub const Server = struct {
     }
 };
 
-const Connection = struct {
+pub const Connection = struct {
     state: ConState,
     fd: fd,
     addr: sys.sockaddr.in,
@@ -191,129 +189,6 @@ const Connection = struct {
     }
 };
 
-fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd) !*Connection {
-    var client_addr: sys.sockaddr.in = undefined;
-    var addrlen: sys.socklen_t = @sizeOf(sys.sockaddr.in);
-    var rc = sys.accept(li_fd, @ptrCast(&client_addr), &addrlen);
-
-    try check("accept", rc);
-
-    const con_fd: fd = @intCast(rc);
-    errdefer utils.close_fd(con_fd);
-
-    if (n_fds >= MAX_EV) {
-        utils.close_fd(@intCast(rc));
-        return error.MaximumConnectionsReached;
-    }
-
-    try so.set_fd_nonblock(con_fd);
-
-    const alloc = try allocator.create(Connection);
-    errdefer allocator.destroy(alloc);
-
-    alloc.* = try Connection.init(allocator, con_fd, &client_addr);
-    errdefer alloc.deinit();
-
-    var event: epoll_event = undefined;
-    event.data.fd = con_fd;
-    event.events = sys.EPOLL.IN;
-    rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_ADD, con_fd, &event);
-    try utils.check_syscall("epoll_creat1()", rc);
-
-    utils.print_sockaddr("new connection from ", &client_addr);
-
-    return alloc;
-}
-
-pub fn handle_read(con: *Connection) void {
-    if (con.rcv_buf.is_full()) {
-        l_err("rcv buffer is full, closing connection", .{});
-        con.state = .wants_close;
-    }
-
-    const cap = con.rcv_buf.data.len - con.rcv_buf.len;
-    const buf: [*]u8 = con.rcv_buf.data.ptr + con.rcv_buf.len;
-    const rc = sys.read(con.fd, buf, cap);
-
-    switch (sys.errno(rc)) {
-        .SUCCESS => {
-            con.rcv_buf.len += @intCast(rc);
-            if (rc == 0) {
-                // socket shut down
-                debug("connection closed in handle read", .{});
-                con.state = .wants_close;
-                return;
-            }
-
-            const msg = Message.try_parse(con.rcv_buf.get().?) catch |err| {
-                debug("couldnt parse message, waiting for more data, {}", .{err});
-                return;
-            };
-
-            msg.print_info("received message ");
-            con.rcv_buf.clear();
-            write_echo(con, &msg) catch |err| {
-                l_err("couldnt echo response, err {}", .{err});
-            };
-        },
-        .AGAIN => {
-            // no data read, we wait for more
-        },
-        else => |err| {
-            l_err("read error {}", .{err});
-            con.state = .wants_close;
-            return;
-        },
-    }
-
-    if (!con.snd_buf.is_empty()) {
-        debug("snd buffer, wanting to write", .{});
-        con.state = .wants_write;
-    }
-
-    return;
-}
-pub fn handle_write(con: *Connection) void {
-    if (con.snd_buf.is_empty()) {
-        warn("snd buffer is empty", .{});
-        con.state = .wants_read;
-    }
-    const data = con.snd_buf.get().?;
-    const rc = sys.write(con.fd, data.ptr, data.len);
-
-    switch (sys.errno(rc)) {
-        .SUCCESS => {
-            if (rc == 0) {
-                // socket shut down
-                debug("connection closed in handle write", .{});
-                con.state = .wants_close;
-            }
-            debug("nbytes written: {}", .{rc});
-        },
-        .AGAIN => {
-            // we try to write next time
-        },
-        else => |err| {
-            l_err("write error {}", .{err});
-            con.state = .wants_close;
-            return;
-        },
-    }
-
-    con.snd_buf.read_n(@intCast(rc));
-    if (con.snd_buf.is_empty()) {
-        debug("snd buffer is empty, waiting for reads again", .{});
-        con.snd_buf.clear();
-        con.state = .wants_read;
-    }
-    return;
-}
-
-pub fn write_echo(con: *Connection, msg: *const Message) !void {
-    try con.snd_buf.append(msg.as_slice());
-
-    return;
-}
 
 test "alloc slice" {
     const allocator = std.testing.allocator;
