@@ -79,13 +79,15 @@ pub fn check_syscall(context: []const u8, rc: usize) !void {
 
 pub const Buf = struct {
     data: []u8,
-    len: usize,
+    lo: u16,
+    len: u16,
     al: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, cap: usize) !Buf {
         const data = try allocator.alloc(u8, cap);
         return .{
             .data = data,
+            .lo = 0,
             .len = 0,
             .al = allocator,
         };
@@ -106,16 +108,30 @@ pub const Buf = struct {
     ///     try self.append(bytes);
     ///     return;
     /// }
-
     pub fn get(self: Buf) ?[]u8 {
         if (self.len == 0) {
             return null;
         }
-        return self.data[0..self.len];
+        return self.data[self.lo..self.len];
     }
 
     pub fn clear(self: *Buf) void {
         self.len = 0;
+        self.lo = 0;
+        return;
+    }
+
+    pub fn is_full(self: *Buf) bool {
+        return self.len >= self.data.len;
+    }
+
+    pub fn is_empty(self: *Buf) bool {
+        return self.len == self.lo;
+    }
+
+    pub fn read_n(self: *Buf, n: u16) void {
+        self.lo += n;
+        std.debug.assert(self.lo <= self.len);
         return;
     }
 

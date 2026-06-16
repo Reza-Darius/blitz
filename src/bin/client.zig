@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const addr = try std.Io.net.IpAddress.parseLiteral(arg_slice[1]);
     const buf = try arena.alloc(u8, 100);
 
-    var encoded_msg = try blitz.Message.encode_string(buf, "hello from the client");
+    var encoded_msg = try blitz.Message.encode_msg(buf, "hello from the client");
     encoded_msg.print();
 
     const con = try addr.connect(io, .{ .mode = .stream });

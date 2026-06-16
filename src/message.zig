@@ -4,7 +4,7 @@ const utils = @import("utils.zig");
 const sys = std.os.linux;
 const posix = std.posix;
 
-const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage };
+const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage, InvalidDataLen, IncompleteMessage, HeaderParseError };
 
 const HDR_SIZE = @sizeOf(Header);
 const MAX_MSG_LEN = 512;
@@ -32,7 +32,7 @@ pub const Message = struct {
             return error.InvalidDataLen;
         }
 
-        const hdr: *Header = try parse_header(data);
+        const hdr = try parse_header(data);
 
         if (hdr.pay_len + HDR_SIZE > data.len) {
             std.log.err("message incomplete, bytes missing: {}", .{hdr.pay_len - data.len - HDR_SIZE});
@@ -41,12 +41,12 @@ pub const Message = struct {
         return .{ .data = data.ptr };
     }
 
-    fn parse_header(data: []u8) MessageError!*Header {
+    fn parse_header(data: []u8) MessageError!*align(1) Header {
         if (data.len < HDR_SIZE) {
             std.log.err("invalid data size for parsing header", .{});
             return error.HeaderParseError;
         }
-        const hdr: *Header = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
+        const hdr = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
 
         if (hdr.pay_len < PAYLOAD_MIN_SIZE) {
             std.log.err("invalid pay_len {}", .{hdr.pay_len});
@@ -74,7 +74,16 @@ pub const Message = struct {
         return;
     }
 
-    pub fn encode_string(out: []u8, str: []const u8) MessageError!Message {
+    pub fn print_info(self: Message, msg: ?[]const u8) void {
+        const hdr = self.header();
+        if (msg) |m| {
+            std.log.info("{s}version={}, cmd={}, pay_len={}, payload: {s}\n", .{ m, hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+        }
+        std.log.info("version={}, cmd={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+        return;
+    }
+
+    pub fn encode_msg(out: []u8, str: []const u8) MessageError!Message {
         if (str.len > MAX_MSG_LEN) {
             std.log.err("provided string exceeds max message length", .{});
             return error.EncodeError;
@@ -117,6 +126,11 @@ pub const Message = struct {
         try writer.writeAll(bytes);
         return;
     }
+
+    pub fn as_slice(self: Message) []u8 {
+        const hdr = self.header();
+        return self.data[0 .. HDR_SIZE + hdr.pay_len];
+    }
 };
 
 test "Message Encoding" {
@@ -126,7 +140,7 @@ test "Message Encoding" {
 
     const message = "hello";
     try std.testing.expect(message.len == 5);
-    const encoded_msg = try Message.encode_string(alloc, message);
+    const encoded_msg = try Message.encode_msg(alloc, message);
     const header = encoded_msg.header();
 
     try std.testing.expect(header.pay_len == message.len);
