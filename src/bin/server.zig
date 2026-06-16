@@ -12,6 +12,6 @@ pub fn main(init: std.process.Init) !void {
     }
     const addr = try std.Io.net.IpAddress.parseLiteral(arg_slice[1]);
 
-    var server = try blitz.Server.init(gpa, addr, .{ .socket_type = .TCP, .reuse_addr = true, .nonblock = false });
+    var server = try blitz.Server.init(gpa, addr);
     try server.run();
 }

@@ -24,25 +24,12 @@ pub const CON_BUF_SIZE: u16 = 1024;
 pub const MAX_CON: u16 = 512;
 
 pub const Server = struct {
-    li_sock: fd,
     addr: std.Io.net.IpAddress,
     allocator: Allocator,
 
     /// initializes a listening server
-    pub fn init(allocator: Allocator, addr: std.Io.net.IpAddress, opt: so.SocketOptions) !Server {
-        const li_sock = try so.get_socket(opt);
-        errdefer utils.close_fd(li_sock);
-
-        const ip_adrr: u32 = std.mem.readInt(u32, &addr.ip4.bytes, .little);
-        const sockaddr: sys.sockaddr.in = .{ .addr = ip_adrr, .port = std.mem.nativeToBig(u16, addr.ip4.port) };
-        var rc = sys.bind(li_sock, @ptrCast(&sockaddr), @sizeOf(sys.sockaddr.in));
-
-        try check("bind", rc);
-
-        rc = sys.listen(li_sock, 1024);
-        try check("listen", rc);
+    pub fn init(allocator: Allocator, addr: std.Io.net.IpAddress) !Server {
         return .{
-            .li_sock = li_sock,
             .addr = addr,
             .allocator = allocator,
         };
@@ -50,22 +37,11 @@ pub const Server = struct {
 
     /// runs the main server loop
     pub fn run(self: *Server) !void {
-        defer utils.close_fd(self.li_sock);
+        const li_sock = try so.get_li_socket(self.addr, .{});
+        defer utils.close_fd(li_sock);
 
-        // creat epoll() fd
-        var rc = sys.epoll_create1(0);
-        try utils.check_syscall("epoll_creat1()", rc);
-        const epoll_fd: fd = @intCast(rc);
+        const epoll_fd: fd = try so.setup_epoll(li_sock);
         defer utils.close_fd(epoll_fd);
-
-        // set up event we are interested in
-        var event: epoll_event = undefined;
-        event.events = sys.EPOLL.IN;
-        event.data.fd = self.li_sock;
-
-        // add listen socket to list
-        rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_ADD, self.li_sock, &event);
-        try utils.check_syscall("epoll_creat1()", rc);
 
         const ev_list = try self.allocator.alloc(epoll_event, MAX_EV);
         defer self.allocator.free(ev_list);
@@ -90,6 +66,7 @@ pub const Server = struct {
                 },
                 .INTR => {
                     // TODO: handle interrupt
+                    debug("interruped received", .{});
                     continue;
                 },
                 else => |err| {
@@ -102,8 +79,8 @@ pub const Server = struct {
                 const ev = ev_list[idx];
                 const con = con_table[@intCast(ev.data.fd)];
 
-                if (ev.data.fd == self.li_sock) {
-                    const new_con = handler.accept_client(self.allocator, n_fds, self.li_sock, epoll_fd) catch |err| {
+                if (ev.data.fd == li_sock) {
+                    const new_con = handler.accept_client(self.allocator, n_fds, li_sock, epoll_fd) catch |err| {
                         l_err("accept client error {}", .{err});
                         continue;
                     };
@@ -113,7 +90,7 @@ pub const Server = struct {
                 }
 
                 if (ev.events & (sys.EPOLL.HUP | sys.EPOLL.ERR) > 0) {
-                    if (ev.data.fd == self.li_sock) {
+                    if (ev.data.fd == li_sock) {
                         l_err("listening socket error!", .{});
                         break;
                     }
