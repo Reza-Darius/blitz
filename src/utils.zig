@@ -98,16 +98,11 @@ pub const Buf = struct {
         if (data.len + self.len > self.data.len) {
             return error.CapOverflow;
         }
-        @memcpy(self.data[self.len..self.data.len], data);
+        @memcpy(self.data[self.len..self.len + data.len], data);
+        self.len += @intCast(data.len);
         return;
     }
 
-    /// /// elem must be a pointer
-    /// pub fn push(self: *Buf, elem: anytype) !void {
-    ///     const bytes: []u8 = std.mem.asBytes(elem);
-    ///     try self.append(bytes);
-    ///     return;
-    /// }
     pub fn get(self: Buf) ?[]u8 {
         if (self.len == 0) {
             return null;
@@ -140,3 +135,11 @@ pub const Buf = struct {
         return;
     }
 };
+
+pub fn epoll_mod(flag: u32, fd: sys.fd_t, epoll_fd: sys.fd_t) !void {
+    var event: sys.epoll_event = undefined;
+    event.data.fd = fd;
+    event.events = flag;
+    const rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_MOD, fd, &event);
+    try check_syscall("epoll_ctrl() mod ", rc);
+}

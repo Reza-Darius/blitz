@@ -64,8 +64,8 @@ pub const Message = struct {
     }
 
     /// doesnt do any checks
-    pub fn header(self: Message) *Header {
-        return @ptrCast(@alignCast(self.data[0..HDR_SIZE]));
+    pub fn header(self: Message) *align(1) Header {
+        return std.mem.bytesAsValue(Header, self.data[0..HDR_SIZE]);
     }
 
     pub fn print(self: Message) void {
@@ -78,6 +78,7 @@ pub const Message = struct {
         const hdr = self.header();
         if (msg) |m| {
             std.log.info("{s}version={}, cmd={}, pay_len={}, payload: {s}\n", .{ m, hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+            return;
         }
         std.log.info("version={}, cmd={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
         return;
@@ -130,6 +131,10 @@ pub const Message = struct {
     pub fn as_slice(self: Message) []u8 {
         const hdr = self.header();
         return self.data[0 .. HDR_SIZE + hdr.pay_len];
+    }
+
+    pub fn len(self: Message) u16 {
+        return self.header().pay_len + HDR_SIZE;
     }
 };
 

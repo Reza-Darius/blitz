@@ -27,7 +27,6 @@ pub const Server = struct {
     li_sock: fd,
     addr: std.Io.net.IpAddress,
     allocator: Allocator,
-    con_table: []*Connection,
 
     /// initializes a listening server
     pub fn init(allocator: Allocator, addr: std.Io.net.IpAddress, opt: so.SocketOptions) !Server {
@@ -42,12 +41,10 @@ pub const Server = struct {
 
         rc = sys.listen(li_sock, 1024);
         try check("listen", rc);
-
         return .{
             .li_sock = li_sock,
             .addr = addr,
             .allocator = allocator,
-            .con_table = undefined,
         };
     }
 
@@ -72,7 +69,9 @@ pub const Server = struct {
 
         const ev_list = try self.allocator.alloc(epoll_event, MAX_EV);
         defer self.allocator.free(ev_list);
-        std.debug.assert(ev_list.len == 0);
+
+        var con_table: []*Connection = try self.allocator.alloc(*Connection, MAX_CON);
+        defer self.allocator.free(con_table);
 
         info("listening on {}", .{self.addr});
 
@@ -101,7 +100,20 @@ pub const Server = struct {
 
             for (0..n_ready) |idx| {
                 const ev = ev_list[idx];
-                const con = self.con_table[@intCast(ev.data.fd)];
+                const con = con_table[@intCast(ev.data.fd)];
+
+                if (ev.data.fd == self.li_sock) {
+                    const new_con = accept_client(self.allocator, n_fds, self.li_sock, epoll_fd) catch |err| {
+                        l_err("accept client error {}", .{err});
+                        continue;
+                    };
+                    // debug("fd {}", .{@as(usize, @intCast(new_con.fd))});
+                    // const ptr = con_table.ptr + @as(usize, @intCast(new_con.fd));
+                    // ptr[0] = new_con;
+                    con_table[@intCast(new_con.fd)] = new_con;
+                    n_fds += 1;
+                    continue;
+                }
 
                 if (ev.events & (sys.EPOLL.HUP | sys.EPOLL.ERR) > 0) {
                     if (ev.data.fd == self.li_sock) {
@@ -112,17 +124,6 @@ pub const Server = struct {
                     warn("fd error, or hang up {}", .{ev.data.fd});
 
                     con.state = .wants_close;
-                }
-
-                if (ev.data.fd == self.li_sock) {
-                    debug("new client!", .{});
-
-                    const new_con = accept_client(self.allocator, n_fds, self.li_sock, epoll_fd, self.con_table) catch |err| {
-                        l_err("accept client error {}", .{err});
-                        continue;
-                    };
-                    self.con_table[@intCast(new_con.fd)] = new_con;
-                    n_fds += 1;
                 }
 
                 if (ev.events & sys.EPOLL.IN > 0) {
@@ -137,10 +138,19 @@ pub const Server = struct {
                     handle_write(con);
                 }
 
-                if (con.state == .wants_close) {
-                    n_fds -= 1;
-                    con.deinit();
-                    self.allocator.destroy(con);
+                switch (con.state) {
+                    .wants_write => {
+                        try utils.epoll_mod(sys.EPOLL.OUT, con.fd, epoll_fd);
+                    },
+                    .wants_read => {
+                        try utils.epoll_mod(sys.EPOLL.IN, con.fd, epoll_fd);
+                    },
+                    .wants_close => {
+                        n_fds -= 1;
+                        con.deinit();
+                        self.allocator.destroy(con);
+                        debug("closed connection: addr: {}, fd: {}, nfds {}", .{con.addr, ev.data.fd, n_fds});
+                    },
                 }
             }
         }
@@ -181,7 +191,7 @@ const Connection = struct {
     }
 };
 
-fn accept_client(allocator: Allocator,n_fds: u16, li_fd: fd, epoll_fd: fd, con_table: []*Connection) !*Connection {
+fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd) !*Connection {
     var client_addr: sys.sockaddr.in = undefined;
     var addrlen: sys.socklen_t = @sizeOf(sys.sockaddr.in);
     var rc = sys.accept(li_fd, @ptrCast(&client_addr), &addrlen);
@@ -198,22 +208,20 @@ fn accept_client(allocator: Allocator,n_fds: u16, li_fd: fd, epoll_fd: fd, con_t
 
     try so.set_fd_nonblock(con_fd);
 
-    var event: epoll_event = undefined;
-    event.data.fd = con_fd;
-    event.events = sys.EPOLL.IN;
-
     const alloc = try allocator.create(Connection);
     errdefer allocator.destroy(alloc);
 
     alloc.* = try Connection.init(allocator, con_fd, &client_addr);
     errdefer alloc.deinit();
 
+    var event: epoll_event = undefined;
+    event.data.fd = con_fd;
+    event.events = sys.EPOLL.IN;
     rc = sys.epoll_ctl(epoll_fd, sys.EPOLL.CTL_ADD, con_fd, &event);
     try utils.check_syscall("epoll_creat1()", rc);
 
     utils.print_sockaddr("new connection from ", &client_addr);
 
-    con_table[@intCast(alloc.fd)] = alloc;
     return alloc;
 }
 
@@ -259,6 +267,7 @@ pub fn handle_read(con: *Connection) void {
     }
 
     if (!con.snd_buf.is_empty()) {
+        debug("snd buffer, wanting to write", .{});
         con.state = .wants_write;
     }
 
@@ -278,17 +287,8 @@ pub fn handle_write(con: *Connection) void {
                 // socket shut down
                 debug("connection closed in handle write", .{});
                 con.state = .wants_close;
-                return;
             }
-
-            if (rc == data.len) {
-                debug("message completely written!", .{});
-                con.state = .wants_read;
-                con.snd_buf.clear();
-            }
-            debug("partial write, {} out of {} bytes written", .{ rc, data.len });
-            // for a partial write we need to track the lower bound
-            con.snd_buf.read_n(@intCast(rc));
+            debug("nbytes written: {}", .{rc});
         },
         .AGAIN => {
             // we try to write next time
@@ -298,6 +298,13 @@ pub fn handle_write(con: *Connection) void {
             con.state = .wants_close;
             return;
         },
+    }
+
+    con.snd_buf.read_n(@intCast(rc));
+    if (con.snd_buf.is_empty()) {
+        debug("snd buffer is empty, waiting for reads again", .{});
+        con.snd_buf.clear();
+        con.state = .wants_read;
     }
     return;
 }
