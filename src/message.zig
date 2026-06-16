@@ -4,22 +4,20 @@ const utils = @import("utils.zig");
 const sys = std.os.linux;
 const posix = std.posix;
 
-const MessageError = error { 
-    ParseError,
-    EncodeError,
-    AllocationError,
-    EmptyMessage,
-    InvalidDataLen,
-    IncompleteMessage,
-    HeaderParseError,
-    InvalidVersion,
-    InvalidCommand,
-    InvalidMessageSize
-};
+const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage, InvalidDataLen, IncompleteMessage, HeaderParseError, InvalidVersion, InvalidCommand, InvalidMessageSize };
 
-const HDR_SIZE = @sizeOf(Header);
+const HDR_SIZE = hdr_size();
+const HDR_INT = @typeInfo(Header).@"struct".backing_integer.?;
 const MAX_MSG_LEN = 512;
 const PAYLOAD_MIN_SIZE = 1;
+
+fn hdr_size() comptime_int {
+    const bits = @bitSizeOf(HDR_INT);
+    if (bits % 8 != 0) {
+        @compileError("invalid header size");
+    }
+    return bits / 8;
+}
 
 pub const Header = packed struct(u24) {
     version: Version,
@@ -48,7 +46,7 @@ pub const Message = struct {
             return error.IncompleteMessage;
         }
 
-        const hdr = try parse_header(data);
+        const hdr = try parse_header(data[0..HDR_SIZE]);
 
         if (hdr.pay_len + HDR_SIZE > data.len) {
             std.log.err("message incomplete, bytes missing: {}", .{hdr.pay_len - data.len - HDR_SIZE});
@@ -57,13 +55,14 @@ pub const Message = struct {
         return .{ .data = data.ptr };
     }
 
-    fn parse_header(data: []u8) MessageError!*align(1) Header {
+    fn parse_header(data: *[HDR_SIZE]u8) MessageError!Header {
         if (data.len < HDR_SIZE) {
             std.log.err("invalid data size for parsing header", .{});
             return error.HeaderParseError;
         }
 
-        const hdr = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
+        const hdr: Header = @bitCast(data.*);
+        // const hdr = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
 
         if (hdr.version != SUPPORTED_VERSION) {
             return error.InvalidVersion;
@@ -74,6 +73,7 @@ pub const Message = struct {
         if (hdr.pay_len + HDR_SIZE > MAX_MSG_LEN) {
             return error.InvalidMessageSize;
         }
+
         if (hdr.pay_len < PAYLOAD_MIN_SIZE) {
             std.log.err("invalid pay_len {}", .{hdr.pay_len});
             return error.HeaderParseError;
@@ -81,17 +81,15 @@ pub const Message = struct {
         return hdr;
     }
 
-    fn write_header(out: []u8, hdr: *const Header) void {
-        std.debug.assert(out.len >= HDR_SIZE);
-        std.debug.assert(hdr.pay_len != 0);
-
-        @memcpy(out[0..HDR_SIZE], std.mem.asBytes(hdr));
+    fn write_header(out: []u8, hdr: Header) void {
+        std.mem.writePackedInt(HDR_INT, out, 0, @bitCast(hdr), .little);
+        // @memcpy(out[0..HDR_SIZE], std.mem.asBytes(&hdr)[0..HDR_SIZE]);
         return;
     }
 
     /// doesnt do any checks
-    pub fn header(self: Message) *align(1) Header {
-        return std.mem.bytesAsValue(Header, self.data[0..HDR_SIZE]);
+    pub fn header(self: Message) Header {
+        return @bitCast(self.data[0..HDR_SIZE].*);
     }
 
     pub fn print(self: Message) void {
@@ -126,7 +124,7 @@ pub const Message = struct {
             .pay_len = @as(u16, @intCast(str.len)),
         };
 
-        Message.write_header(out, &hdr);
+        Message.write_header(out, hdr);
         @memcpy(out[HDR_SIZE .. HDR_SIZE + hdr.pay_len], str);
 
         return .{ .data = out.ptr };
