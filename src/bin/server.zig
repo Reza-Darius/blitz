@@ -4,7 +4,6 @@ const blitz = @import("blitz");
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const arena = init.arena.allocator();
-
     const arg_slice = try init.minimal.args.toSlice(arena);
 
     if (arg_slice.len == 1) {

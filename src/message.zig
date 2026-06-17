@@ -27,6 +27,13 @@ pub const Header = packed struct(u24) {
     pay_len: u16,
 };
 
+const SUPPORTED_VERSION = Version.V1;
+
+pub const Version = enum(u2) {
+    V1,
+    _,
+};
+
 pub const CTRL = packed struct(u6) {
     msg_type: MsgType,
     data: packed union(u5) { Request: RequestCMD, Response: ResponseCode },
@@ -49,7 +56,7 @@ pub const CTRL = packed struct(u6) {
         Err,
         // this field enables printing, should be deprecated
         _,
-    };
+};
 
     fn validate(ctrl: CTRL) MessageError!void {
         const req_fields_len = comptime @typeInfo(RequestCMD).@"enum".fields.len;
@@ -88,12 +95,6 @@ pub const CTRL = packed struct(u6) {
     }
 };
 
-const SUPPORTED_VERSION = Version.V1;
-
-pub const Version = enum(u2) {
-    V1 = 0,
-    _,
-};
 
 pub const Message = struct {
     data: [*]u8,

@@ -10,3 +10,6 @@ server: build
 
 client: build
   .{{ CLIENT_BIN }} {{ SERVER_ADDR }}
+
+clean:
+  rm -rf .zig-cache

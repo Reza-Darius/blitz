@@ -77,6 +77,7 @@ pub fn check_syscall(context: []const u8, rc: usize) !void {
     }
 }
 
+/// two pointer append only buffer
 pub const Buf = struct {
     data: []u8,
     lo: u16,
@@ -104,9 +105,9 @@ pub const Buf = struct {
         return;
     }
 
-    /// gets a to the written unread data
+    /// gets a slice to the written between lo and hi
     pub fn get_slice(self: Buf) ?[]u8 {
-        if (self.hi == 0 or self.is_empty()) {
+        if (self.is_empty()) {
             return null;
         }
         return self.data[self.lo..self.lo + self.hi];
@@ -126,7 +127,7 @@ pub const Buf = struct {
         return self.hi == self.lo;
     }
 
-    /// consuming read
+    /// advances lo bound
     pub fn read_n(self: *Buf, n: u16) void {
         if (n > self.hi or self.is_empty()) {
             @panic("out of bounds read_n()");
@@ -136,6 +137,7 @@ pub const Buf = struct {
         return;
     }
 
+    /// consuming read
     pub fn consume_n(self: *Buf, n: u16) ?[]u8 {
         if (n > self.len() or self.is_empty()) {
             return null;

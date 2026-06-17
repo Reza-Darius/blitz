@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -72,6 +73,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             // List of modules available for import in source files part of the
             // root module.
+            .link_libc = true,
             .imports = &.{
                 // Here "blitz" is the name you will use in your source code to
                 // import this module (e.g. `@import("blitz")`). The name is
@@ -83,16 +85,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const client_exe = b.addExecutable(.{
-        .name = "blitz-client",
-        .root_module = b.createModule(.{
-        .root_source_file = b.path("src/bin/client.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{.name = "blitz", .module = mod}
-        }
-    }) });
+    const client_exe = b.addExecutable(.{ .name = "blitz-client", .root_module = b.createModule(.{ .root_source_file = b.path("src/bin/client.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blitz", .module = mod }} }) });
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -100,7 +93,6 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(server_exe);
     b.installArtifact(client_exe);
-
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
