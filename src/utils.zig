@@ -83,8 +83,8 @@ pub const Buf = struct {
     len: u16,
     al: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, cap: usize) !Buf {
-        const data = try allocator.alloc(u8, cap);
+    pub fn init(allocator: std.mem.Allocator, capacity: usize) !Buf {
+        const data = try allocator.alloc(u8, capacity);
         return .{
             .data = data,
             .lo = 0,
@@ -95,20 +95,21 @@ pub const Buf = struct {
 
     /// doesnt grow the buffer and errors if the cap would be exceeded
     pub fn append(self: *Buf, data: []u8) !void {
-        if (data.len + self.len > self.data.len) {
+        const i = self.len + self.lo;
+        if (data.len + i > self.data.len) {
             return error.CapOverflow;
         }
-        @memcpy(self.data[self.len .. self.len + data.len], data);
+        @memcpy(self.data[i .. i + data.len], data);
         self.len += @intCast(data.len);
         return;
     }
 
-    /// gets a slice to the written data
-    pub fn get(self: Buf) ?[]u8 {
+    /// gets a to the written unread data
+    pub fn as_slice(self: Buf) ?[]u8 {
         if (self.len == 0) {
             return null;
         }
-        return self.data[self.lo..self.len];
+        return self.data[self.lo..self.lo + self.len];
     }
 
     pub fn clear(self: *Buf) void {
@@ -125,16 +126,35 @@ pub const Buf = struct {
         return self.len == self.lo;
     }
 
-    /// moves the lower index
+    /// consuming read
     pub fn read_n(self: *Buf, n: u16) void {
+        if (n > self.len or self.is_empty()) {
+            @panic("out of bounds read_n()");
+        }
         self.lo += n;
+        self.len -= n;
         std.debug.assert(self.lo <= self.len);
         return;
+    }
+
+    pub fn consume_n(self: *Buf, n: u16) ?[]u8 {
+        if (n > self.len or self.is_empty()) {
+            return null;
+        }
+        const s = self.data[self.lo .. self.lo + n];
+        self.lo += n;
+        self.len -= n;
+        std.debug.assert(self.lo <= self.len);
+        return s;
     }
 
     pub fn deinit(self: Buf) void {
         self.al.free(self.data);
         return;
+    }
+
+    pub fn cap(self: Buf) u16 {
+        return self.data.len;
     }
 };
 

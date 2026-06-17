@@ -82,11 +82,10 @@ pub fn handle_read(con: *Connection) void {
         },
     }
 
-    var read_buf: []u8 = con.rcv_buf.get().?;
-    var bytes_read: u16 = 0;
+    var read_buf: []u8 = con.rcv_buf.as_slice().?;
 
-    while (read_buf.len != 0) {
-        const msg = Message.try_parse(read_buf) catch |err| {
+    while (!con.rcv_buf.is_empty()) {
+        const msg = Message.parse(read_buf) catch |err| {
             if (err == error.IncompleteMessage) {
                 debug("couldnt parse message, waiting for more data, {}", .{err});
                 break;
@@ -97,33 +96,31 @@ pub fn handle_read(con: *Connection) void {
         };
 
         msg.print_info("received message ");
-        write_echo(con, &msg) catch |err| {
+        write_response(con, &msg) catch |err| {
             l_err("couldnt write echo response, err {}", .{err});
         };
 
-        const read_bytes = msg.len();
-        bytes_read += read_bytes;
-        read_buf = read_buf[read_bytes..];
+        con.rcv_buf.read_n(msg.len());
+        read_buf = con.rcv_buf.as_slice().?;
     }
 
-    con.rcv_buf.read_n(bytes_read);
     if (con.rcv_buf.is_empty()) {
         con.rcv_buf.clear();
     }
 
     if (!con.snd_buf.is_empty()) {
         debug("snd buffer, wanting to write", .{});
-        con.state = .wants_write;
+        handle_write(con);
     }
-
     return;
 }
+
 pub fn handle_write(con: *Connection) void {
     if (con.snd_buf.is_empty()) {
         warn("snd buffer is empty", .{});
         con.state = .wants_read;
     }
-    const data = con.snd_buf.get().?;
+    const data = con.snd_buf.as_slice().?;
     const rc = sys.write(con.fd, data.ptr, data.len);
 
     switch (sys.errno(rc)) {
@@ -132,11 +129,13 @@ pub fn handle_write(con: *Connection) void {
                 // socket shut down
                 debug("connection closed in handle write", .{});
                 con.state = .wants_close;
+                return;
             }
             debug("nbytes written: {}", .{rc});
+            con.snd_buf.read_n(@intCast(rc));
         },
         .AGAIN => {
-            // we try to write next time
+            // cant write at this time
         },
         else => |err| {
             l_err("write error {}", .{err});
@@ -145,16 +144,17 @@ pub fn handle_write(con: *Connection) void {
         },
     }
 
-    con.snd_buf.read_n(@intCast(rc));
     if (con.snd_buf.is_empty()) {
         debug("snd buffer is empty, waiting for reads again", .{});
         con.snd_buf.clear();
         con.state = .wants_read;
+    } else {
+        con.state = .wants_write;
     }
     return;
 }
 
-pub fn write_echo(con: *Connection, msg: *const Message) !void {
+pub fn write_response(con: *Connection, msg: *const Message) !void {
     try con.snd_buf.append(msg.as_slice());
 
     return;

@@ -11,7 +11,7 @@ pub fn main(init: std.process.Init) !void {
         return error.NoAddressProvided;
     }
 
-    const n_msgs = 3;
+    const n_msgs = 5;
 
     const addr = try std.Io.net.IpAddress.parseLiteral(arg_slice[1]);
     const write_buf = try arena.alloc(u8, 200);
@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
     for (0..n_msgs) |_| {
         const res = try reader.interface.readAlloc(arena, encoded_msg.len());
-        const resp_msg = try blitz.Message.try_parse(res);
+        const resp_msg = try blitz.Message.parse(res);
         resp_msg.print_info("got in response: ");
     }
 }

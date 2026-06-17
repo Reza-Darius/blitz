@@ -19,9 +19,9 @@ const epoll_event = sys.epoll_event;
 const Allocator = std.mem.Allocator;
 const Message = message.Message;
 
-pub const MAX_EV: u16 = 512;
-pub const CON_BUF_SIZE: u16 = 1024;
-pub const MAX_CON: u16 = 512;
+pub const MAX_EV: u16 = 1024;
+pub const MAX_CON: u16 = 1024;
+pub const CON_BUF_SIZE: u16 = 2048;
 
 pub const Server = struct {
     addr: std.Io.net.IpAddress,
@@ -140,7 +140,7 @@ pub const Connection = struct {
     state: ConState,
     fd: fd,
     addr: sys.sockaddr.in,
-    al: Allocator,
+    al: std.heap.ArenaAllocator,
 
     snd_buf: utils.Buf,
     rcv_buf: utils.Buf,
@@ -152,19 +152,20 @@ pub const Connection = struct {
     };
 
     pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in) !Connection {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const a = arena.allocator();
         return .{
             .state = .wants_read,
             .fd = client_fd,
             .addr = addr.*,
-            .al = allocator,
-            .snd_buf = try utils.Buf.init(allocator, CON_BUF_SIZE),
-            .rcv_buf = try utils.Buf.init(allocator, CON_BUF_SIZE),
+            .al = arena,
+            .snd_buf = try utils.Buf.init(a, CON_BUF_SIZE),
+            .rcv_buf = try utils.Buf.init(a, CON_BUF_SIZE),
         };
     }
 
     pub fn deinit(self: *Connection) void {
-        self.rcv_buf.deinit();
-        self.snd_buf.deinit();
+        self.al.deinit();
         utils.close_fd(self.fd);
         return;
     }

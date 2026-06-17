@@ -4,9 +4,10 @@ const utils = @import("utils.zig");
 const sys = std.os.linux;
 const posix = std.posix;
 
-const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage, InvalidDataLen, IncompleteMessage, HeaderParseError, InvalidVersion, InvalidCommand, InvalidMessageSize };
+const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage, InvalidDataLen, IncompleteMessage, HeaderParseError, InvalidVersion, InvalidCommand, InvalidMessageSize, InvalidRequest, InvalidResponse };
 
 const HDR_SIZE = hdr_size();
+/// backing integer of the header
 const HDR_INT = @typeInfo(Header).@"struct".backing_integer.?;
 const MAX_MSG_LEN = 512;
 const PAYLOAD_MIN_SIZE = 1;
@@ -21,14 +22,69 @@ fn hdr_size() comptime_int {
 
 pub const Header = packed struct(u24) {
     version: Version,
-    cmd: CMD,
+    ctrl: CTRL,
     pay_len: u16,
 };
 
-pub const CMD = enum(u6) {
-    Set = 0,
-    Retrieve = 1,
-    Msg = 2,
+pub const CTRL = packed struct(u6) {
+    msg_type: MsgType,
+    data: packed union(u5) { Request: RequestCMD, Response: ResponseCode },
+
+    pub const MsgType = enum(u1) {
+        Request,
+        Response,
+    };
+
+    pub const RequestCMD = enum(u5) {
+        Set,
+        Get,
+        Echo,
+        // this field enabled printing, should be deprecated
+        _,
+    };
+
+    pub const ResponseCode = enum(u5) {
+        Ok,
+        Err,
+        // this field enabled printing, should be deprecated
+        _,
+    };
+
+    fn validate(ctrl: CTRL) MessageError!void {
+        const req_fields_len = comptime @typeInfo(RequestCMD).@"enum".fields.len;
+
+        inline for (0..req_fields_len) |idx| {
+            const v = @typeInfo(RequestCMD).@"enum".fields[idx].value;
+            if (v != idx) {
+                @compileError("cant designate value to CTRL data field");
+            }
+        }
+
+        const resp_fields_len = comptime @typeInfo(ResponseCode).@"enum".fields.len;
+
+        inline for (0..resp_fields_len) |idx| {
+            const v = @typeInfo(ResponseCode).@"enum".fields[idx].value;
+            if (v != idx) {
+                @compileError("cant designate value to CTRL data field");
+            }
+        }
+
+        switch (ctrl.msg_type) {
+            .Request => {
+                const i = @intFromEnum(ctrl.data.Request);
+                if (i >= req_fields_len) {
+                    return error.InvalidRequest;
+                }
+            },
+            .Response => {
+                const i = @intFromEnum(ctrl.data.Response);
+                if (i >= resp_fields_len) {
+                    return error.InvalidRequest;
+                }
+            },
+        }
+        return;
+    }
 };
 
 const SUPPORTED_VERSION = Version.V1;
@@ -41,7 +97,7 @@ pub const Version = enum(u2) {
 pub const Message = struct {
     data: [*]u8,
 
-    pub fn try_parse(data: []u8) MessageError!Message {
+    pub fn parse(data: []u8) MessageError!Message {
         if (data.len < HDR_SIZE + PAYLOAD_MIN_SIZE) {
             return error.IncompleteMessage;
         }
@@ -61,14 +117,14 @@ pub const Message = struct {
             return error.HeaderParseError;
         }
 
-        const hdr: Header = @bitCast(data.*);
-        // const hdr = std.mem.bytesAsValue(Header, data[0..HDR_SIZE]);
+        const hdr_int = std.mem.readInt(HDR_INT, data, .big);
+        const hdr: Header = @bitCast(hdr_int);
+
+        try hdr.ctrl.validate();
 
         if (hdr.version != SUPPORTED_VERSION) {
             return error.InvalidVersion;
         }
-
-        _ = std.enums.fromInt(CMD, @intFromEnum(hdr.cmd)) orelse return error.InvalidCommand;
 
         if (hdr.pay_len + HDR_SIZE > MAX_MSG_LEN) {
             return error.InvalidMessageSize;
@@ -81,30 +137,33 @@ pub const Message = struct {
         return hdr;
     }
 
-    fn write_header(out: []u8, hdr: Header) void {
-        std.mem.writePackedInt(HDR_INT, out, 0, @bitCast(hdr), .little);
-        // @memcpy(out[0..HDR_SIZE], std.mem.asBytes(&hdr)[0..HDR_SIZE]);
+    fn write_header(out: *[HDR_SIZE]u8, hdr: Header) void {
+        const hi: HDR_INT = @bitCast(hdr);
+        std.mem.writeInt(HDR_INT, out, hi, .big);
+        // std.debug.print("header bytes: {x} {x} {x}\n", .{ out[0], out[1], out[2] });
         return;
     }
 
     /// doesnt do any checks
     pub fn header(self: Message) Header {
-        return @bitCast(self.data[0..HDR_SIZE].*);
+        const hdr_int = std.mem.readPackedInt(HDR_INT, self.data[0..HDR_SIZE], 0, .big);
+        const hdr: Header = @bitCast(hdr_int);
+        return hdr;
     }
 
     pub fn print(self: Message) void {
         const hdr = self.header();
-        std.debug.print("version={}, cmd={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+        std.debug.print("version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
         return;
     }
 
     pub fn print_info(self: Message, msg: ?[]const u8) void {
         const hdr = self.header();
         if (msg) |m| {
-            std.log.info("{s}version={}, cmd={}, pay_len={}, payload: {s}\n", .{ m, hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+            std.log.info("{s}version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ m, hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
             return;
         }
-        std.log.info("version={}, cmd={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.cmd, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+        std.log.info("version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
         return;
     }
 
@@ -120,11 +179,11 @@ pub const Message = struct {
 
         const hdr: Header = .{
             .version = .V1,
-            .cmd = .Msg,
+            .ctrl = .{ .msg_type = .Request, .data = .{ .Request = .Echo } },
             .pay_len = @as(u16, @intCast(str.len)),
         };
 
-        Message.write_header(out, hdr);
+        Message.write_header(out[0..HDR_SIZE], hdr);
         @memcpy(out[HDR_SIZE .. HDR_SIZE + hdr.pay_len], str);
 
         return .{ .data = out.ptr };
@@ -169,10 +228,59 @@ test "Message Encoding" {
 
     const message = "hello";
     try std.testing.expect(message.len == 5);
+
     const encoded_msg = try Message.encode_msg(alloc, message);
     const header = encoded_msg.header();
+    std.debug.print("header {any}\n", .{encoded_msg.data[0..HDR_SIZE]});
+    std.debug.print("pay len {x}\n", .{header.pay_len});
 
     try std.testing.expect(header.pay_len == message.len);
     try std.testing.expect(std.mem.eql(u8, encoded_msg.data[HDR_SIZE .. HDR_SIZE + header.pay_len], message[0..5]));
     encoded_msg.print();
+    }
+
+test "faulty ctrl" {
+    const allocator = std.testing.allocator;
+
+    const message = "bad msg";
+    var buf = try allocator.alloc(u8, HDR_SIZE + message.len);
+    defer allocator.free(buf);
+
+    const bad_ctrl: CTRL = .{
+        .msg_type = .Request,
+        .data = @bitCast(@as(u5,30)),
+    };
+    const hdr: Header = .{
+        .version = .V1,
+        .ctrl = bad_ctrl,
+        .pay_len = message.len,
+    };
+    Message.write_header(buf[0..HDR_SIZE], hdr);
+    @memcpy(buf[HDR_SIZE..], message);
+    const res = Message.parse(buf);
+
+    try std.testing.expect(res == error.InvalidRequest);
+}
+
+test "faulty version" {
+    const allocator = std.testing.allocator;
+
+    const message = "bad msg";
+    var buf = try allocator.alloc(u8, HDR_SIZE + message.len);
+    defer allocator.free(buf);
+
+    const bad_version: Version = @enumFromInt(@as(u2, 3));
+    const hdr: Header = .{
+        .version = bad_version,
+        .ctrl = .{
+            .msg_type = .Request,
+            .data = .{ .Request = .Echo }
+        },
+        .pay_len = message.len,
+    };
+    Message.write_header(buf[0..HDR_SIZE], hdr);
+    @memcpy(buf[HDR_SIZE..], message);
+    const res = Message.parse(buf);
+    
+    try std.testing.expect(res == error.InvalidVersion);
 }
