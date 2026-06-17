@@ -8,6 +8,7 @@ const warn = std.log.warn;
 
 const MAP_SIZE = map_size(1024);
 
+// asserts that capacity is power of 2 for faster modulo operation
 fn map_size(n: comptime_int) comptime_int {
     comptime std.debug.assert((n & (n - 1)) == 0);
     return n;
@@ -19,19 +20,21 @@ pub const HashMap = struct {
     al: std.mem.Allocator,
 
     const Hash = u64;
-    const Entry = []u8;
-    const KEY = "secret key";
+    const Entry = []const u8;
+    const KEY = "super duper secret key";
 
     const Bucket = struct {
-        psl: u8,
-        hash: Hash,
-        entry: ?Entry,
+        psl: u8 = 0,
+        hash: Hash = 0,
+        entry: ?Entry = null,
     };
 
-    pub fn init(allocator: std.mem.Allocator) !HashMap {
+    pub fn init(allocator: std.mem.Allocator, cap: usize) !HashMap {
+        const data = try allocator.alloc(Bucket, cap);
+        @memset(data, .{ .psl = 0, .hash = 0, .entry = null });
         return .{
             .len = 0,
-            .data = try allocator.alloc(Bucket, MAP_SIZE),
+            .data = data,
             .al = allocator,
         };
     }
@@ -39,35 +42,46 @@ pub const HashMap = struct {
     pub fn deinit(self: *HashMap) void {
         // loop over entire map for deallocation?
         self.al.free(self.data);
-        return ;
+        return;
     }
 
-    pub fn insert(self: *HashMap, key: []u8, elem: Entry) void {
+    fn print(self: HashMap) void {
+        for (0..self.data.len) |i| {
+            std.debug.print("No {}: {}\n", .{ i, self.data[i] });
+        }
+        return;
+    }
+
+    pub fn insert(self: *HashMap, key: []const u8, elem: Entry) void {
         var b: Bucket = .{
             .psl = 0,
             .hash = hash(key),
             .entry = elem,
         };
+        std.debug.print("inserting {any}\n", .{b});
+        var i: u32 = index(self.data.len, b.hash);
 
-        var idx = index(b.hash);
-
-        while (self.data[idx].entry != null) {
-            if (b.psl > self.data[idx].psl) {
-                std.mem.swap(Bucket, &self.data[idx], &b);
+        while (self.data[i].entry != null) {
+            std.debug.print("checking idx {}\n", .{i});
+            std.debug.print("colliding with bucket {any}, at {}\n", .{ self.data[i], i });
+            if (b.psl > self.data[i].psl) {
+                std.debug.print("swapping at {}\n", .{i});
+                std.mem.swap(Bucket, &self.data[i], &b);
             }
-            idx = index(idx + 1);
+            i = index(self.data.len, i + 1);
             b.psl += 1;
         }
 
-        self.data[idx] = b;
+        self.data[i] = b;
+        std.debug.print("found place at {}\n", .{i});
         self.len += 1;
         return;
     }
 
-    pub fn get(self: HashMap, key: []u8) ?Entry {
-        var psl = 0;
+    pub fn get(self: HashMap, key: []const u8) ?Entry {
+        var psl: u8 = 0;
         const h = hash(key);
-        var idx = index(h);
+        var idx: u32 = index(self.data.len, h);
 
         while (self.data[idx].entry != null) {
             if (self.data[idx].hash == h) {
@@ -76,28 +90,29 @@ pub const HashMap = struct {
             if (psl > self.data[idx].psl) {
                 return null;
             }
-            idx = index(idx + 1);
+            idx = index(self.data.len, idx + 1);
             psl += 1;
         }
         return null;
     }
 
     pub fn remove(self: *HashMap, key: []u8) ?Entry {
-        const i = index(hash(key));
+        const i = index(self.data.len, hash(key));
 
         if (self.data[i].entry == null) return null;
 
         const r = self.data[i].entry;
         self.data[i].entry = null;
 
-        var j = i + 1;
-        while (self.data[j].entry != null) : (j += 1) {
+        var j: u32 = index(self.data.len, i + 1);
+        while (self.data[j].entry != null) {
             if (self.data[j].psl > 0) {
                 self.data[j].psl -= 1;
                 std.mem.swap(Bucket, &self.data[j], &self.data[j - 1]);
             } else {
                 break;
             }
+            j = index(self.data.len, j + 1);
         }
         return r;
     }
@@ -105,9 +120,9 @@ pub const HashMap = struct {
     fn grow() void {}
 
     fn hash(elem: Entry) Hash {
-        const hasher: std.hash.SipHash64(2, 4) = .init(KEY);
+        var hasher: std.hash.SipHash64(2, 4) = .init(KEY[0..16]);
         hasher.update(elem);
-        
+
         return hasher.finalInt();
     }
 
@@ -115,7 +130,30 @@ pub const HashMap = struct {
         return self.len / self.data.len;
     }
 
-    inline fn index(h: Hash) u32 {
-        return h & (MAP_SIZE - 1);
+    inline fn index(c: usize, h: Hash) u32 {
+        // only power of two capacity values are permitted to enable faster modulo
+        std.debug.assert((c & (c - 1)) == 0);
+        return @intCast(h & (c - 1));
     }
 };
+
+test "hashmap insert/get" {
+    const alloc = std.testing.allocator;
+    const data = [_]u16{ 2, 5, 7, 10, 42, 120 };
+    var map = try HashMap.init(alloc, 16);
+    defer map.deinit();
+
+    for (0..data.len) |i| {
+        const bytes = std.mem.asBytes(&data[i]);
+        map.insert(bytes, bytes);
+    }
+
+    map.print();
+
+    for (0..data.len) |i| {
+        const bytes = std.mem.asBytes(&data[i]);
+        const res = map.get(bytes);
+        const r = std.mem.readInt(u16, res.?[0..2], .little);
+        try std.testing.expect(r == data[i]);
+    }
+}
