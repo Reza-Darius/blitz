@@ -58,19 +58,20 @@ pub fn handle_read(con: *Connection) void {
         con.state = .wants_close;
     }
 
-    const cap = con.rcv_buf.data.len - con.rcv_buf.len;
-    const buf: [*]u8 = con.rcv_buf.data.ptr + con.rcv_buf.len;
+    const cap: usize = con.rcv_buf.cap();
+    const buf: [*]u8 = con.rcv_buf.data.ptr + con.rcv_buf.hi;
     const rc = sys.read(con.fd, buf, cap);
 
     switch (sys.errno(rc)) {
         .SUCCESS => {
-            con.rcv_buf.len += @intCast(rc);
             if (rc == 0) {
                 // socket shut down
                 debug("connection closed in handle read", .{});
                 con.state = .wants_close;
                 return;
             }
+            con.rcv_buf.hi += @intCast(rc);
+            debug("success: read bytes: {}", .{rc});
         },
         .AGAIN => {
             // no data read, we wait for more
@@ -82,10 +83,8 @@ pub fn handle_read(con: *Connection) void {
         },
     }
 
-    var read_buf: []u8 = con.rcv_buf.as_slice().?;
-
-    while (!con.rcv_buf.is_empty()) {
-        const msg = Message.parse(read_buf) catch |err| {
+    while (con.rcv_buf.get_slice()) |s| {
+        const msg = Message.parse(s) catch |err| {
             if (err == error.IncompleteMessage) {
                 debug("couldnt parse message, waiting for more data, {}", .{err});
                 break;
@@ -101,7 +100,6 @@ pub fn handle_read(con: *Connection) void {
         };
 
         con.rcv_buf.read_n(msg.len());
-        read_buf = con.rcv_buf.as_slice().?;
     }
 
     if (con.rcv_buf.is_empty()) {
@@ -120,7 +118,7 @@ pub fn handle_write(con: *Connection) void {
         warn("snd buffer is empty", .{});
         con.state = .wants_read;
     }
-    const data = con.snd_buf.as_slice().?;
+    const data = con.snd_buf.get_slice().?;
     const rc = sys.write(con.fd, data.ptr, data.len);
 
     switch (sys.errno(rc)) {

@@ -80,7 +80,7 @@ pub fn check_syscall(context: []const u8, rc: usize) !void {
 pub const Buf = struct {
     data: []u8,
     lo: u16,
-    len: u16,
+    hi: u16,
     al: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !Buf {
@@ -88,63 +88,61 @@ pub const Buf = struct {
         return .{
             .data = data,
             .lo = 0,
-            .len = 0,
+            .hi = 0,
             .al = allocator,
         };
     }
 
     /// doesnt grow the buffer and errors if the cap would be exceeded
     pub fn append(self: *Buf, data: []u8) !void {
-        const i = self.len + self.lo;
+        const i = self.hi + self.lo;
         if (data.len + i > self.data.len) {
             return error.CapOverflow;
         }
         @memcpy(self.data[i .. i + data.len], data);
-        self.len += @intCast(data.len);
+        self.hi += @intCast(data.len);
         return;
     }
 
     /// gets a to the written unread data
-    pub fn as_slice(self: Buf) ?[]u8 {
-        if (self.len == 0) {
+    pub fn get_slice(self: Buf) ?[]u8 {
+        if (self.hi == 0 or self.is_empty()) {
             return null;
         }
-        return self.data[self.lo..self.lo + self.len];
+        return self.data[self.lo..self.lo + self.hi];
     }
 
     pub fn clear(self: *Buf) void {
-        self.len = 0;
+        self.hi = 0;
         self.lo = 0;
         return;
     }
 
-    pub fn is_full(self: *Buf) bool {
-        return self.len >= self.data.len;
+    pub fn is_full(self: *const Buf) bool {
+        return self.hi >= self.data.len;
     }
 
-    pub fn is_empty(self: *Buf) bool {
-        return self.len == self.lo;
+    pub fn is_empty(self: *const Buf) bool {
+        return self.hi == self.lo;
     }
 
     /// consuming read
     pub fn read_n(self: *Buf, n: u16) void {
-        if (n > self.len or self.is_empty()) {
+        if (n > self.hi or self.is_empty()) {
             @panic("out of bounds read_n()");
         }
         self.lo += n;
-        self.len -= n;
-        std.debug.assert(self.lo <= self.len);
+        std.debug.assert(self.lo <= self.hi);
         return;
     }
 
     pub fn consume_n(self: *Buf, n: u16) ?[]u8 {
-        if (n > self.len or self.is_empty()) {
+        if (n > self.len() or self.is_empty()) {
             return null;
         }
         const s = self.data[self.lo .. self.lo + n];
         self.lo += n;
-        self.len -= n;
-        std.debug.assert(self.lo <= self.len);
+        std.debug.assert(self.lo <= self.hi);
         return s;
     }
 
@@ -154,7 +152,11 @@ pub const Buf = struct {
     }
 
     pub fn cap(self: Buf) u16 {
-        return self.data.len;
+        return @intCast(self.data.len);
+    }
+
+    pub fn len(self: Buf) u16 {
+        return self.hi - self.lo;
     }
 };
 

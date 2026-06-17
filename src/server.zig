@@ -126,9 +126,9 @@ pub const Server = struct {
                     },
                     .wants_close => {
                         n_fds -= 1;
+                        utils.print_sockaddr("closing connection: ", &con.addr);
                         con.deinit();
                         self.allocator.destroy(con);
-                        utils.print_sockaddr("closed connection: ", &con.addr);
                     },
                 }
             }

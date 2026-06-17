@@ -11,7 +11,7 @@ pub fn main(init: std.process.Init) !void {
         return error.NoAddressProvided;
     }
 
-    const n_msgs = 5;
+    const n_msgs = 10;
 
     const addr = try std.Io.net.IpAddress.parseLiteral(arg_slice[1]);
     const write_buf = try arena.alloc(u8, 200);

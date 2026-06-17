@@ -6,9 +6,10 @@ const posix = std.posix;
 
 const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessage, InvalidDataLen, IncompleteMessage, HeaderParseError, InvalidVersion, InvalidCommand, InvalidMessageSize, InvalidRequest, InvalidResponse };
 
-const HDR_SIZE = hdr_size();
 /// backing integer of the header
 const HDR_INT = @typeInfo(Header).@"struct".backing_integer.?;
+const HDR_SIZE = hdr_size();
+
 const MAX_MSG_LEN = 512;
 const PAYLOAD_MIN_SIZE = 1;
 
@@ -39,14 +40,14 @@ pub const CTRL = packed struct(u6) {
         Set,
         Get,
         Echo,
-        // this field enabled printing, should be deprecated
+        // this field enables printing, should be deprecated
         _,
     };
 
     pub const ResponseCode = enum(u5) {
         Ok,
         Err,
-        // this field enabled printing, should be deprecated
+        // this field enables printing, should be deprecated
         _,
     };
 
@@ -120,11 +121,11 @@ pub const Message = struct {
         const hdr_int = std.mem.readInt(HDR_INT, data, .big);
         const hdr: Header = @bitCast(hdr_int);
 
-        try hdr.ctrl.validate();
-
         if (hdr.version != SUPPORTED_VERSION) {
             return error.InvalidVersion;
         }
+
+        try hdr.ctrl.validate();
 
         if (hdr.pay_len + HDR_SIZE > MAX_MSG_LEN) {
             return error.InvalidMessageSize;
@@ -139,16 +140,17 @@ pub const Message = struct {
 
     fn write_header(out: *[HDR_SIZE]u8, hdr: Header) void {
         const hi: HDR_INT = @bitCast(hdr);
+        const le_bytes = std.mem.asBytes(&hi);
+        std.debug.print("header bytes lil endian: {} {} {}\n", .{ le_bytes[0], le_bytes[1], le_bytes[2] });
         std.mem.writeInt(HDR_INT, out, hi, .big);
-        // std.debug.print("header bytes: {x} {x} {x}\n", .{ out[0], out[1], out[2] });
+        std.debug.print("header bytes big endian: {} {} {}\n", .{ out[0], out[1], out[2] });
         return;
     }
 
     /// doesnt do any checks
     pub fn header(self: Message) Header {
-        const hdr_int = std.mem.readPackedInt(HDR_INT, self.data[0..HDR_SIZE], 0, .big);
-        const hdr: Header = @bitCast(hdr_int);
-        return hdr;
+        const hdr_int = std.mem.readInt(HDR_INT, self.data[0..HDR_SIZE], .big);
+        return @bitCast(hdr_int);
     }
 
     pub fn print(self: Message) void {
@@ -161,9 +163,9 @@ pub const Message = struct {
         const hdr = self.header();
         if (msg) |m| {
             std.log.info("{s}version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ m, hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
-            return;
+        } else {
+            std.log.info("version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
         }
-        std.log.info("version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
         return;
     }
 
@@ -189,21 +191,6 @@ pub const Message = struct {
         return .{ .data = out.ptr };
     }
 
-    pub fn read_from_socket(self: *Message, socket: sys.fd_t) !void {
-        var hdr: Header = undefined;
-        try utils.read_socket(socket, std.mem.asBytes(&hdr));
-
-        if (hdr.tot_len < 3) {
-            return error.InvalidMessage;
-        }
-
-        self.payload = try self.allocator.alloc(u8, hdr.tot_len);
-        self.write_header(&hdr);
-        try utils.read_socket(socket, self.payload[HDR_SIZE..hdr.tot_len]);
-
-        return;
-    }
-
     pub fn write(self: Message, writer: *std.Io.Writer) !void {
         const hdr = self.header();
         const bytes = self.data[0 .. HDR_SIZE + hdr.pay_len];
@@ -217,7 +204,7 @@ pub const Message = struct {
     }
 
     pub fn len(self: Message) u16 {
-        return std.mem.readInt(u16, self.data[1..3], .little) + HDR_SIZE;
+        return std.mem.readInt(u16, self.data[0..2], .big) + HDR_SIZE;
     }
 };
 
@@ -237,7 +224,7 @@ test "Message Encoding" {
     try std.testing.expect(header.pay_len == message.len);
     try std.testing.expect(std.mem.eql(u8, encoded_msg.data[HDR_SIZE .. HDR_SIZE + header.pay_len], message[0..5]));
     encoded_msg.print();
-    }
+}
 
 test "faulty ctrl" {
     const allocator = std.testing.allocator;
@@ -248,7 +235,7 @@ test "faulty ctrl" {
 
     const bad_ctrl: CTRL = .{
         .msg_type = .Request,
-        .data = @bitCast(@as(u5,30)),
+        .data = @bitCast(@as(u5, 30)),
     };
     const hdr: Header = .{
         .version = .V1,
@@ -272,15 +259,19 @@ test "faulty version" {
     const bad_version: Version = @enumFromInt(@as(u2, 3));
     const hdr: Header = .{
         .version = bad_version,
-        .ctrl = .{
-            .msg_type = .Request,
-            .data = .{ .Request = .Echo }
-        },
+        .ctrl = .{ .msg_type = .Request, .data = .{ .Request = .Echo } },
         .pay_len = message.len,
     };
     Message.write_header(buf[0..HDR_SIZE], hdr);
     @memcpy(buf[HDR_SIZE..], message);
     const res = Message.parse(buf);
-    
+
     try std.testing.expect(res == error.InvalidVersion);
 }
+
+// test "endian memes" {
+//     const buf: []u8 = undefined;
+//     const a: u5 = 2;
+//     std.mem.writePackedInt(u5, buf, 3, a, .native);
+//     std.debug.print("le {b}", .{buf[0]});
+// }
