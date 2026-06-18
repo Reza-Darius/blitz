@@ -47,7 +47,6 @@ pub const HashMap = struct {
             const slot = self.data[i];
 
             if (slot.entry) |e| {
-                debug("freeing entry: {s}", .{e.get_key()});
                 e.destroy(self.al);
             }
         }
@@ -67,6 +66,7 @@ pub const HashMap = struct {
         return;
     }
 
+    /// insert a new entry, supplied data is copied and allocated
     pub fn insert(self: *HashMap, key: []const u8, value: []const u8) !void {
         // not sure if its worth it to return an error
         std.debug.assert(self.len < self.data.len);
@@ -123,6 +123,7 @@ pub const HashMap = struct {
         return null;
     }
 
+    /// removes an entry from the hashmap if it exists, the caller is responsible for calling entry.destroy();
     pub fn remove(self: *HashMap, key: []const u8) ?*Entry {
         const c = self.data.len;
 
@@ -262,7 +263,7 @@ pub const Entry = struct {
         return;
     }
 
-    fn len(self: *Entry) u32 {
+    pub fn len(self: *Entry) u32 {
         const kl = self.key_len();
         const vl = self.val_len();
         return 2 * s + kl + vl;
