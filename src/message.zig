@@ -44,8 +44,9 @@ pub const CTRL = packed struct(u6) {
     };
 
     pub const RequestCMD = enum(u5) {
-        Set,
         Get,
+        Set,
+        Del,
         Echo,
         // this field enables printing, should be deprecated
         _,
@@ -141,10 +142,10 @@ pub const Message = struct {
 
     fn write_header(out: *[HDR_SIZE]u8, hdr: Header) void {
         const hi: HDR_INT = @bitCast(hdr);
-        const le_bytes = std.mem.asBytes(&hi);
-        std.debug.print("header bytes lil endian: {} {} {}\n", .{ le_bytes[0], le_bytes[1], le_bytes[2] });
+        // const le_bytes = std.mem.asBytes(&hi);
+        // std.debug.print("header bytes lil endian: {} {} {}\n", .{ le_bytes[0], le_bytes[1], le_bytes[2] });
         std.mem.writeInt(HDR_INT, out, hi, .big);
-        std.debug.print("header bytes big endian: {} {} {}\n", .{ out[0], out[1], out[2] });
+        // std.debug.print("header bytes big endian: {} {} {}\n", .{ out[0], out[1], out[2] });
         return;
     }
 

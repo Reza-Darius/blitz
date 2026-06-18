@@ -351,3 +351,37 @@ test "hashmap delete" {
     }
     try std.testing.expect(map.len == 0);
 }
+
+test "hashmap insert/get strings" {
+    std.testing.log_level = .debug;
+
+    const alloc = std.testing.allocator;
+    const c = 8;
+    std.debug.assert((c & (c - 1)) == 0);
+
+    var map = try HashMap.init(alloc, c);
+    defer map.deinit();
+
+    const s1 = [_][]const u8 {"hello", "world"};
+    const s2 = [_][]const u8 {"zig", "awesome"};
+    const s3 = [_][]const u8 {"rust", "cool"};
+
+    try map.insert(s1[0], s1[1]);
+    try map.insert(s2[0], s2[1]);
+    try map.insert(s3[0], s3[1]);
+    try std.testing.expect(map.len == 3);
+
+    map.print();
+
+    const res1 = map.get(s1[0]).?;
+    try std.testing.expect(std.mem.eql(u8, res1.get_key(), s1[0]));
+    try std.testing.expect(std.mem.eql(u8, res1.get_val(), s1[1]));
+
+    const res2 = map.get(s2[0]).?;
+    try std.testing.expect(std.mem.eql(u8, res2.get_key(), s2[0]));
+    try std.testing.expect(std.mem.eql(u8, res2.get_val(), s2[1]));
+
+    const res3 = map.get(s3[0]).?;
+    try std.testing.expect(std.mem.eql(u8, res3.get_key(), s3[0]));
+    try std.testing.expect(std.mem.eql(u8, res3.get_val(), s3[1]));
+}
