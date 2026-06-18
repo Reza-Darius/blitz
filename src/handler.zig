@@ -35,11 +35,9 @@ pub fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd) 
 
     try so.set_fd_nonblock(con_fd);
 
-    const alloc = try allocator.create(Connection);
-    errdefer allocator.destroy(alloc);
+    const con = try Connection.init(allocator, con_fd, &client_addr);
+    errdefer con.deinit();
 
-    alloc.* = try Connection.init(allocator, con_fd, &client_addr);
-    errdefer alloc.deinit();
 
     var event: epoll_event = undefined;
     event.data.fd = con_fd;
@@ -49,7 +47,7 @@ pub fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd) 
 
     utils.print_sockaddr("new connection from ", &client_addr);
 
-    return alloc;
+    return con;
 }
 
 pub fn handle_read(con: *Connection) void {

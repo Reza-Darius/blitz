@@ -16,6 +16,7 @@ fn map_size(n: comptime_int) comptime_int {
     return n;
 }
 
+/// a managed hash table
 pub const HashMap = struct {
     len: u32,
     data: []Bucket,
@@ -28,7 +29,7 @@ pub const HashMap = struct {
     const Bucket = struct {
         /// probe sequence length
         psl: u8 = 0,
-        /// 64 bit integer generaed by siphash
+        /// 64 bit integer
         hash: Hash = 0,
         entry: ?*Entry = null,
     };
@@ -55,6 +56,7 @@ pub const HashMap = struct {
         return;
     }
 
+    /// primarily for debug purposes
     fn print(self: HashMap) void {
         for (0..self.data.len) |i| {
             const slot = self.data[i];
@@ -75,6 +77,7 @@ pub const HashMap = struct {
 
         const e = try Entry.encode(self.al, key, value);
         self.insert_helper(e);
+        self.len += 1;
         try self.check_grow();
         return;
     }
@@ -86,7 +89,7 @@ pub const HashMap = struct {
             .hash = hash(e.get_key()),
             .entry = e,
         };
-        
+
         debug("inserting {any}\n", .{cur_bucket});
 
         var i: u32 = index(c, cur_bucket.hash);
@@ -112,10 +115,10 @@ pub const HashMap = struct {
         debug("found place at {}\n", .{i});
 
         self.data[i] = cur_bucket;
-        self.len += 1;
         return;
     }
 
+    /// retrieves an entry from the table, the caller is not responsible for deallocation
     pub fn get(self: HashMap, key: []const u8) ?*Entry {
         std.debug.assert(key.len != 0);
 
@@ -192,8 +195,10 @@ pub const HashMap = struct {
     }
 
     fn check_grow(self: *HashMap) !void {
-        if (self.len / self.data.len > LOAD_THRESH) {
+        const load: f32 = @as(f32, @floatFromInt(self.len)) / @as(f32, @floatFromInt(self.data.len));
+        if (load > LOAD_THRESH) {
             warn("hashmap grow triggered!, cur len={}", .{self.len});
+            self.print();
             try self.grow();
         }
         return;
@@ -214,6 +219,9 @@ pub const HashMap = struct {
                 self.insert_helper(e);
             }
         }
+
+        info("hashmap grow successful, new cap: {}", .{self.data.len});
+        self.print();
     }
 
     fn hash(key: []const u8) Hash {
@@ -308,7 +316,7 @@ pub const Entry = struct {
         return 2 * s + kl + vl;
     }
 
-    fn destroy(self: *Entry, al: std.mem.Allocator) void {
+    pub fn destroy(self: *Entry, al: std.mem.Allocator) void {
         const data: [*]align(8) u8 = @ptrCast(self);
         al.free(data[0..self.len()]);
         return;
@@ -423,4 +431,32 @@ test "hashmap insert/get strings" {
     const res3 = map.get(s3[0]).?;
     try std.testing.expect(std.mem.eql(u8, res3.get_key(), s3[0]));
     try std.testing.expect(std.mem.eql(u8, res3.get_val(), s3[1]));
+}
+
+test "hashmap regrow" {
+    std.testing.log_level = .debug;
+
+    const alloc = std.testing.allocator;
+    const c = 8;
+    std.debug.assert((c & (c - 1)) == 0);
+
+    var map = try HashMap.init(alloc, c);
+    defer map.deinit();
+
+    const n_keys = 10;
+    const k = "key";
+    const v = "value";
+
+    for (0..n_keys) |i| {
+        var key: [4:0]u8 = undefined;
+        @memcpy(key[0..3], k);
+        key[3] = @as(u8, @intCast(i)) + 48;
+
+        debug("inserting key: {s}\n", .{key});
+
+        try map.insert(&key, v);
+    }
+    map.print();
+    std.debug.assert(map.len == n_keys);
+    std.debug.assert(map.data.len == c * 2);
 }

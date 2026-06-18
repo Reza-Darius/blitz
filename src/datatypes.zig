@@ -11,6 +11,13 @@ pub const DataUnit = union(DataType) {
     Float: f64,
     Boolean: bool,
 
+    pub const DataType = enum(u8) {
+        String,
+        Integer,
+        Float,
+        Boolean,
+    };
+
     const s_dt = @sizeOf(DataType);
     const s_sl = @sizeOf(u16);
     const s_fl = @sizeOf(@TypeOf(DataType.Float));
@@ -18,8 +25,10 @@ pub const DataUnit = union(DataType) {
     const s_boo = @sizeOf(@TypeOf(DataType.Boolean));
 
     pub fn decode(data: []const u8) !DataUnit {
+        std.debug.assert(data.len != 0);
+
         const dt = try read_type(data[0]);
-        const slice = data[0..data.len];
+        const slice = data[1..data.len];
 
         return switch (dt) {
             .String => parse_string(slice),
@@ -35,15 +44,15 @@ pub const DataUnit = union(DataType) {
             return error.StringParseError;
         }
 
-        const len = std.mem.readInt(u16, data[0..2], .big);
+        const slen = std.mem.readInt(u16, data[0..2], .big);
 
-        if (data.len < len - 2) {
+        if (data.len < slen - 2) {
             l_err("infalid data len for string");
             return error.StringParseError;
         }
 
         return DataType{ .String = .{
-            .len = len,
+            .len = slen,
             .data = data.ptr + 2,
         } };
     }
@@ -99,15 +108,15 @@ pub const DataUnit = union(DataType) {
         };
     }
 
-    fn encode_string(out: []u8, len: u16, data: [*]u8) !u32 {
-        if (out.len < len + 2 + 1) {
+    fn encode_string(out: []u8, slen: u16, data: [*]u8) !u32 {
+        if (out.len < slen + 2 + 1) {
             l_err("invalid out length for string encoding");
             return error.EncodeStringError;
         }
         out[0] = @intFromEnum(DataType.String);
-        std.mem.writeInt(u16, out[1..3], len, .big);
-        @memcpy(out[3 .. 3 + len], data[0..len]);
-        return 1 + @sizeOf(u16) + len;
+        std.mem.writeInt(u16, out[1..3], slen, .big);
+        @memcpy(out[3 .. 3 + slen], data[0..slen]);
+        return 1 + @sizeOf(u16) + slen;
     }
 
     fn encode_int(out: []u8, data: i64) !u32 {
@@ -139,11 +148,13 @@ pub const DataUnit = union(DataType) {
         out[1] = @intFromBool(data);
         return 1 + 1;
     }
+
+    pub fn len(self: *DataType) u32 {
+        return switch (self) {
+            .String => |*v| 1 + 2 + v.len,
+            .Integer, .Float => 1 + 4,
+            .Boolean => 1 + 1,
+        };
+    }
 };
 
-pub const DataType = enum(u8) {
-    String,
-    Integer,
-    Float,
-    Boolean,
-};

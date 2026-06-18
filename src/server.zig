@@ -128,7 +128,6 @@ pub const Server = struct {
                         n_fds -= 1;
                         utils.print_sockaddr("closing connection: ", &con.addr);
                         con.deinit();
-                        self.allocator.destroy(con);
                     },
                 }
             }
@@ -151,10 +150,11 @@ pub const Connection = struct {
         wants_close,
     };
 
-    pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in) !Connection {
+    pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in) !*Connection {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const a = arena.allocator();
-        return .{
+        const con = try a.create(Connection);
+        con.* = .{
             .state = .wants_read,
             .fd = client_fd,
             .addr = addr.*,
@@ -162,11 +162,12 @@ pub const Connection = struct {
             .snd_buf = try utils.Buf.init(a, CON_BUF_SIZE),
             .rcv_buf = try utils.Buf.init(a, CON_BUF_SIZE),
         };
+        return con;
     }
 
     pub fn deinit(self: *Connection) void {
-        self.al.deinit();
         utils.close_fd(self.fd);
+        self.al.deinit();
         return;
     }
 };
