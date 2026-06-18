@@ -23,6 +23,7 @@ pub const HashMap = struct {
 
     const Hash = u64;
     const HASH_KEY = "super duper secret key";
+    const LOAD_THRESH = 0.9;
 
     const Bucket = struct {
         /// probe sequence length
@@ -68,17 +69,26 @@ pub const HashMap = struct {
 
     /// insert a new entry, supplied data is copied and allocated
     pub fn insert(self: *HashMap, key: []const u8, value: []const u8) !void {
-        // not sure if its worth it to return an error
         std.debug.assert(self.len < self.data.len);
+        std.debug.assert(key.len != 0);
+        std.debug.assert(value.len != 0);
 
         const e = try Entry.encode(self.al, key, value);
+        self.insert_helper(e);
+        try self.check_grow();
+        return;
+    }
+
+    fn insert_helper(self: *HashMap, e: *Entry) void {
         const c = self.data.len;
         var cur_bucket: Bucket = .{
             .psl = 0,
-            .hash = hash(key),
+            .hash = hash(e.get_key()),
             .entry = e,
         };
+        
         debug("inserting {any}\n", .{cur_bucket});
+
         var i: u32 = index(c, cur_bucket.hash);
 
         while (self.data[i].entry != null) {
@@ -89,7 +99,9 @@ pub const HashMap = struct {
             // that hash to bucket i+1 (this naturally includes wraparound)
             if (cur_bucket.psl > self.data[i].psl) {
                 debug("swapping at {}\n", .{i});
+
                 std.mem.swap(Bucket, &self.data[i], &cur_bucket);
+
                 debug("checking for {any} now", .{cur_bucket});
             }
 
@@ -97,13 +109,16 @@ pub const HashMap = struct {
             cur_bucket.psl += 1;
         }
 
-        self.data[i] = cur_bucket;
         debug("found place at {}\n", .{i});
+
+        self.data[i] = cur_bucket;
         self.len += 1;
         return;
     }
 
     pub fn get(self: HashMap, key: []const u8) ?*Entry {
+        std.debug.assert(key.len != 0);
+
         const c = self.data.len;
         const cur_hash = hash(key);
 
@@ -125,6 +140,8 @@ pub const HashMap = struct {
 
     /// removes an entry from the hashmap if it exists, the caller is responsible for calling entry.destroy();
     pub fn remove(self: *HashMap, key: []const u8) ?*Entry {
+        std.debug.assert(key.len != 0);
+
         const c = self.data.len;
 
         const h = hash(key);
@@ -174,7 +191,30 @@ pub const HashMap = struct {
         return r;
     }
 
-    fn grow() void {}
+    fn check_grow(self: *HashMap) !void {
+        if (self.len / self.data.len > LOAD_THRESH) {
+            warn("hashmap grow triggered!, cur len={}", .{self.len});
+            try self.grow();
+        }
+        return;
+    }
+
+    fn grow(self: *HashMap) !void {
+        const old_map = self.data;
+        const old_cap = old_map.len;
+        defer self.al.free(old_map);
+
+        // we double the capacity
+        self.data = try self.al.alloc(Bucket, old_cap * 2);
+        @memset(self.data, .{ .psl = 0, .hash = 0, .entry = null });
+
+        for (0..self.len) |i| {
+            const slot = old_map[i];
+            if (slot.entry) |e| {
+                self.insert_helper(e);
+            }
+        }
+    }
 
     fn hash(key: []const u8) Hash {
         var hasher: std.hash.SipHash64(2, 4) = .init(HASH_KEY[0..16]);
@@ -184,10 +224,6 @@ pub const HashMap = struct {
 
     pub fn is_empty(self: HashMap) bool {
         return self.len == 0;
-    }
-
-    fn load(self: HashMap) f32 {
-        return self.len / self.data.len;
     }
 
     inline fn index(c: usize, x: u64) u32 {
@@ -204,6 +240,9 @@ pub const Entry = struct {
     const s = @sizeOf(u32);
 
     fn encode(al: std.mem.Allocator, key: []const u8, value: []const u8) !*Entry {
+        std.debug.assert(key.len != 0);
+        std.debug.assert(value.len != 0);
+
         if (key.len > MAX_KEY_SIZE) {
             return error.KeySizeExceeded;
         }
@@ -362,9 +401,9 @@ test "hashmap insert/get strings" {
     var map = try HashMap.init(alloc, c);
     defer map.deinit();
 
-    const s1 = [_][]const u8 {"hello", "world"};
-    const s2 = [_][]const u8 {"zig", "awesome"};
-    const s3 = [_][]const u8 {"rust", "cool"};
+    const s1 = [_][]const u8{ "hello", "world" };
+    const s2 = [_][]const u8{ "zig", "awesome" };
+    const s3 = [_][]const u8{ "rust", "cool" };
 
     try map.insert(s1[0], s1[1]);
     try map.insert(s2[0], s2[1]);
