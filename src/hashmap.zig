@@ -7,6 +7,8 @@ const l_err = std.log.err;
 const warn = std.log.warn;
 
 const MAP_SIZE = map_size(1024);
+const MAX_KEY_SIZE = 2024;
+const MAX_VALUE_SIZE = 2024;
 
 // asserts that capacity is power of 2 for faster modulo operation
 fn map_size(n: comptime_int) comptime_int {
@@ -20,15 +22,14 @@ pub const HashMap = struct {
     al: std.mem.Allocator,
 
     const Hash = u64;
-    const Entry = []const u8;
-    const KEY = "super duper secret key";
+    const HASH_KEY = "super duper secret key";
 
     const Bucket = struct {
         /// probe sequence length
         psl: u8 = 0,
         /// 64 bit integer generaed by siphash
         hash: Hash = 0,
-        entry: ?Entry = null,
+        entry: ?*Entry = null,
     };
 
     pub fn init(allocator: std.mem.Allocator, cap: usize) !HashMap {
@@ -42,64 +43,78 @@ pub const HashMap = struct {
     }
 
     pub fn deinit(self: *HashMap) void {
-        // loop over entire map for deallocation?
+        for (0..self.data.len) |i| {
+            const slot = self.data[i];
+
+            if (slot.entry) |e| {
+                debug("freeing entry: {s}", .{e.get_key()});
+                e.destroy(self.al);
+            }
+        }
         self.al.free(self.data);
         return;
     }
 
     fn print(self: HashMap) void {
         for (0..self.data.len) |i| {
-            std.debug.print("No {}: {}\n", .{ i, self.data[i] });
+            const slot = self.data[i];
+            if (slot.entry) |e| {
+                std.debug.print("No {}: psl={} key={s}, val={s}\n", .{ i, slot.psl, e.get_key(), e.get_val() });
+            } else {
+                std.debug.print("No {}: empty\n", .{i});
+            }
         }
         return;
     }
 
-    pub fn insert(self: *HashMap, key: []const u8, elem: Entry) void {
+    pub fn insert(self: *HashMap, key: []const u8, value: []const u8) !void {
         // not sure if its worth it to return an error
         std.debug.assert(self.len < self.data.len);
 
+        const e = try Entry.encode(self.al, key, value);
         const c = self.data.len;
-        var b: Bucket = .{
+        var cur_bucket: Bucket = .{
             .psl = 0,
             .hash = hash(key),
-            .entry = elem,
+            .entry = e,
         };
-        debug("inserting {any}\n", .{b});
-        var i: u32 = index(c, b.hash);
+        debug("inserting {any}\n", .{cur_bucket});
+        var i: u32 = index(c, cur_bucket.hash);
 
         while (self.data[i].entry != null) {
-            debug("checking idx {} with psl {}\n", .{ i, b.psl });
+            debug("checking idx {} with psl {}\n", .{ i, cur_bucket.psl });
             debug("colliding with bucket {any}, at {}\n", .{ self.data[i], i });
 
             // INV: For any i, the values that hash to bucket i precede the values
             // that hash to bucket i+1 (this naturally includes wraparound)
-            if (b.psl > self.data[i].psl) {
+            if (cur_bucket.psl > self.data[i].psl) {
                 debug("swapping at {}\n", .{i});
-                std.mem.swap(Bucket, &self.data[i], &b);
-                debug("checking for {any} now", .{b});
+                std.mem.swap(Bucket, &self.data[i], &cur_bucket);
+                debug("checking for {any} now", .{cur_bucket});
             }
 
             i = index(c, i + 1);
-            b.psl += 1;
+            cur_bucket.psl += 1;
         }
 
-        self.data[i] = b;
+        self.data[i] = cur_bucket;
         debug("found place at {}\n", .{i});
         self.len += 1;
         return;
     }
 
-    pub fn get(self: HashMap, key: []const u8) ?Entry {
+    pub fn get(self: HashMap, key: []const u8) ?*Entry {
         const c = self.data.len;
+        const cur_hash = hash(key);
+
         var psl: u8 = 0;
-        const h = hash(key);
-        var i: u32 = index(c, h);
+        var i: u32 = index(c, cur_hash);
 
         while (self.data[i].entry != null) {
             if (psl > self.data[i].psl) {
                 return null;
             }
-            if (self.data[i].hash == h) {
+            if (self.data[i].hash == cur_hash) {
                 return self.data[i].entry;
             }
             i = index(c, i + 1);
@@ -108,14 +123,14 @@ pub const HashMap = struct {
         return null;
     }
 
-    pub fn remove(self: *HashMap, key: []const u8) ?Entry {
+    pub fn remove(self: *HashMap, key: []const u8) ?*Entry {
         const c = self.data.len;
 
         const h = hash(key);
         var i = index(c, h);
         var psl: u8 = 0;
 
-        var r: ?Entry = null;
+        var r: ?*Entry = null;
         while (self.data[i].entry != null) {
             if (psl > self.data[i].psl) {
                 // the key is not there
@@ -123,6 +138,7 @@ pub const HashMap = struct {
             }
             if (self.data[i].hash == h) {
                 r = self.data[i].entry;
+                self.data[i].entry = null;
                 break;
             }
             i = index(c, i + 1);
@@ -134,7 +150,7 @@ pub const HashMap = struct {
             return null;
         }
 
-        debug("removing {any} at {}\n", .{ r, i });
+        debug("removing {s} at {}\n", .{ r.?.get_key(), i });
 
         var j: u32 = index(c, i + 1);
         while (self.data[j].entry != null) {
@@ -142,7 +158,10 @@ pub const HashMap = struct {
             if (self.data[j].psl > 0) {
                 self.data[j].psl -= 1;
                 debug("swapping with neighbor {any} at {any}\n", .{ self.data[j], j });
-                std.mem.swap(Bucket, &self.data[j], &self.data[j - 1]);
+
+                const dest = index(c, j + c - 1);
+
+                std.mem.swap(Bucket, &self.data[j], &self.data[dest]);
             } else {
                 break;
             }
@@ -156,26 +175,119 @@ pub const HashMap = struct {
 
     fn grow() void {}
 
-    fn hash(elem: Entry) Hash {
-        var hasher: std.hash.SipHash64(2, 4) = .init(KEY[0..16]);
-        hasher.update(elem);
+    fn hash(key: []const u8) Hash {
+        var hasher: std.hash.SipHash64(2, 4) = .init(HASH_KEY[0..16]);
+        hasher.update(key);
         return hasher.finalInt();
     }
 
-    fn vpsl(c: usize, h: Hash, i: u32) u32 {
-        return index(c, h + i);
+    pub fn is_empty(self: HashMap) bool {
+        return self.len == 0;
     }
 
     fn load(self: HashMap) f32 {
         return self.len / self.data.len;
     }
 
-    inline fn index(c: usize, h: Hash) u32 {
+    inline fn index(c: usize, x: u64) u32 {
         // only power of two capacity values are permitted to enable faster modulo
         std.debug.assert((c & (c - 1)) == 0);
-        return @intCast(h & (c - 1));
+        return @intCast(x & (c - 1));
     }
 };
+
+// schema: [key len: usize][val len: usize][data u8]
+pub const Entry = struct {
+    data: [*]u8,
+
+    const s = @sizeOf(u32);
+
+    fn encode(al: std.mem.Allocator, key: []const u8, value: []const u8) !*Entry {
+        if (key.len > MAX_KEY_SIZE) {
+            return error.KeySizeExceeded;
+        }
+
+        if (value.len > MAX_VALUE_SIZE) {
+            return error.ValueSizeExceeded;
+        }
+
+        const kl: u32 = @intCast(key.len);
+        const vl: u32 = @intCast(value.len);
+
+        const data = try al.alignedAlloc(u8, .@"8", kl + vl + (s * 2));
+
+        std.mem.writeInt(u32, data[0..s], kl, .little);
+        std.mem.writeInt(u32, data[s .. s * 2], vl, .little);
+
+        @memcpy(data[s * 2 .. s * 2 + kl], key);
+        @memcpy(data[s * 2 + kl .. s * 2 + kl + vl], value);
+
+        const e: *Entry = @ptrCast(data.ptr);
+
+        std.debug.assert(@intFromPtr(e) == @intFromPtr(data.ptr));
+        return e;
+    }
+
+    fn key_len(self: *Entry) u32 {
+        const data: [*]u8 = @ptrCast(self);
+        return std.mem.readInt(u32, data[0..s], .little);
+    }
+
+    fn val_len(self: *Entry) u32 {
+        const data: [*]u8 = @ptrCast(self);
+        return std.mem.readInt(u32, data[s .. s * 2], .little);
+    }
+
+    pub fn get_key(self: *Entry) []const u8 {
+        const data: [*]u8 = @ptrCast(self);
+        const kl = self.key_len();
+        return data[s * 2 .. s * 2 + kl];
+    }
+
+    pub fn get_val(self: *Entry) []const u8 {
+        const data: [*]u8 = @ptrCast(self);
+        const kl = self.key_len();
+        const vl = self.val_len();
+        return data[s * 2 + kl .. s * 2 + kl + vl];
+    }
+
+    pub fn print(self: *Entry) void {
+        const kl = self.key_len();
+        const vl = self.val_len();
+        const k = self.get_key();
+        const v = self.get_val();
+
+        std.debug.print("Entry: klen = {}, vlen = {}, key = {s}, val = {s}\n", .{ kl, vl, k, v });
+
+        return;
+    }
+
+    fn len(self: *Entry) u32 {
+        const kl = self.key_len();
+        const vl = self.val_len();
+        return 2 * s + kl + vl;
+    }
+
+    fn destroy(self: *Entry, al: std.mem.Allocator) void {
+        const data: [*]align(8) u8 = @ptrCast(self);
+        al.free(data[0..self.len()]);
+        return;
+    }
+};
+
+test Entry {
+    std.testing.log_level = .debug;
+    const alloc = std.testing.allocator;
+    const k = "hello";
+    const v = "world";
+
+    const e = try Entry.encode(alloc, k, v);
+    defer e.destroy(alloc);
+    e.print();
+
+    try std.testing.expect(std.mem.eql(u8, e.get_key(), k));
+    try std.testing.expect(std.mem.eql(u8, e.get_val(), v));
+}
 
 test "hashmap insert/get" {
     std.testing.log_level = .debug;
@@ -187,22 +299,22 @@ test "hashmap insert/get" {
     var map = try HashMap.init(alloc, c);
     defer map.deinit();
 
-    const data = [_]u16{ 2, 5, 7, 10, 42, 120 };
+    const data = [_][]const u8{ "2", "5", "7", "10", "42", "120" };
 
     for (0..data.len) |i| {
-        const bytes = std.mem.asBytes(&data[i]);
-        map.insert(bytes, bytes);
+        const bytes = data[i];
+        try map.insert(bytes, bytes);
     }
     try std.testing.expect(map.len == data.len);
 
     map.print();
 
     for (0..data.len) |i| {
-        const bytes = std.mem.asBytes(&data[i]);
-        const res = map.get(bytes);
-        const r = std.mem.readInt(u16, res.?[0..2], .little);
+        const bytes = data[i];
+        const res = map.get(bytes).?;
 
-        try std.testing.expect(r == data[i]);
+        try std.testing.expect(std.mem.eql(u8, bytes, res.get_key()));
+        std.debug.print("key found {s}!\n", .{res.get_key()});
     }
 }
 
@@ -216,24 +328,25 @@ test "hashmap delete" {
     var map = try HashMap.init(alloc, c);
     defer map.deinit();
 
-    const data = [_]u16{ 2, 5, 7, 10, 42, 120 };
+    const data = [_][]const u8{ "2", "5", "7", "10", "42", "120" };
 
     for (0..data.len) |i| {
-        const bytes = std.mem.asBytes(&data[i]);
-        map.insert(bytes, bytes);
+        const bytes = data[i];
+        try map.insert(bytes, bytes);
     }
     try std.testing.expect(map.len == data.len);
 
     map.print();
 
     for (0..data.len) |i| {
-        std.log.debug("testing {}\n", .{data[i]});
+        std.log.debug("testing {s}\n", .{data[i]});
 
-        const bytes = std.mem.asBytes(&data[i]);
-        const res = map.remove(bytes);
-        const r = std.mem.readInt(u16, res.?[0..2], .little);
+        const bytes = data[i];
+        const res = map.remove(bytes).?;
+        defer res.destroy(alloc);
 
-        try std.testing.expect(r == data[i]);
+        try std.testing.expect(std.mem.eql(u8, bytes, res.get_key()));
+        map.print();
     }
     try std.testing.expect(map.len == 0);
 }
