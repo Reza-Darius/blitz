@@ -102,12 +102,12 @@ pub fn handle_read(con: *Connection) void {
             }
         };
 
+        msg.print_info("received message ");
         process_request(con, msg) catch |err| {
             l_err("proccessing failed: {}\n", .{err});
             @panic("processing failed");
         };
 
-        msg.print_info("received message ");
         con.rcv_buf.read_n(msg.len());
         parsed_requests += 1;
     }
@@ -234,8 +234,9 @@ pub fn process_request(con: *Connection, msg: Message) !void {
     const write_slice = con.snd_buf.get_free_slice().?;
     const resp = try Message.write_response(write_slice, resp_code, resp_data);
     con.snd_buf.written_n(resp.len());
+    resp.print_info("response: ");
 
-    debug("written {} byte msg into write slice\n", .{resp.len()});
+    // debug("written {} byte msg into write slice\n", .{resp.len()});
 
     return;
 }

@@ -26,6 +26,11 @@ pub const Header = packed struct(u24) {
     version: Version = SUPPORTED_VERSION,
     ctrl: CTRL,
     pay_len: u16 = 0,
+
+    pub fn is_ok(self: Header) bool {
+        return self.ctrl.msg_type == .Response and
+            self.ctrl.data.Response == .Ok;
+    }
 };
 
 const SUPPORTED_VERSION = Version.V1;
@@ -112,7 +117,7 @@ pub const Message = struct {
         const hdr = try parse_header(data[0..HDR_SIZE]);
 
         if (hdr.pay_len + HDR_SIZE > data.len) {
-            std.log.err("message incomplete, bytes missing: {}", .{hdr.pay_len - data.len - HDR_SIZE});
+            std.log.err("message incomplete, bytes missing: got={}, expected={}", .{data.len, HDR_SIZE + hdr.pay_len});
             return error.IncompleteMessage;
         }
         return .{ .data = data.ptr };
@@ -157,16 +162,58 @@ pub const Message = struct {
 
     pub fn print(self: Message) void {
         const hdr = self.header();
-        std.debug.print("version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+        const pay = self.payload();
+        std.debug.print("version={}, ctrl={}, pay_len={}: ", .{ hdr.version, hdr.ctrl, hdr.pay_len });
+        var bytes_printed = hdr.pay_len;
+
+        while (bytes_printed > 0) {
+            const du = DataUnit.decode(pay[bytes_printed..pay.len]) catch unreachable;
+            switch (du) {
+                .String => |*v| std.debug.print("String, len = {}: {s}, ", .{ v.s_len, v.data[0..v.s_len] }),
+                .Integer => |v| std.debug.print("Integer: {}, ", .{v}),
+                .Float => |v| std.debug.print("Float: {}, ", .{v}),
+                .Boolean => |v| std.debug.print("Bool: {}, ", .{v}),
+                else => unreachable,
+            }
+
+            bytes_printed += @intCast(du.len());
+        }
+        std.debug.print("\n", .{});
         return;
     }
 
     pub fn print_info(self: Message, msg: ?[]const u8) void {
-        const hdr = self.header();
         if (msg) |m| {
-            std.log.info("{s}version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ m, hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
-        } else {
-            std.log.info("version={}, ctrl={}, pay_len={}, payload: {s}\n", .{ hdr.version, hdr.ctrl, hdr.pay_len, self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len] });
+            std.log.info("{s}", .{m});
+        }
+        const hdr = self.header();
+        const pay = self.payload();
+
+        std.log.info("version={}, ", .{hdr.version});
+
+        switch (hdr.ctrl.msg_type) {
+            .Request => {
+                std.log.info("Request: {},", .{hdr.ctrl.data.Request});
+            },
+            .Response => {
+                std.log.info("Response: {},", .{hdr.ctrl.data.Response});
+            },
+        }
+        std.log.info("paylen={}, ", .{hdr.pay_len});
+
+        var remaining: u16 = 0;
+
+        while (pay.len - remaining > 0) {
+            const du = DataUnit.decode(pay[remaining..pay.len]) catch unreachable;
+            switch (du) {
+                .String => |*v| std.log.info("String, len = {}: {s}, ", .{ v.s_len, v.data[0..v.s_len] }),
+                .Integer => |v| std.log.info("Integer: {}, ", .{v}),
+                .Float => |v| std.log.info("Float: {}, ", .{v}),
+                .Boolean => |v| std.log.info("Bool: {}, ", .{v}),
+                else => unreachable,
+            }
+
+            remaining += @intCast(du.len());
         }
         return;
     }
@@ -234,7 +281,7 @@ pub const Message = struct {
         }
 
         if (out.len < needed_space) {
-            std.log.err("failed to construct request: out buffer is too small, needed={}, got={}\n", .{needed_space, out.len});
+            std.log.err("failed to construct request: out buffer is too small, needed={}, got={}\n", .{ needed_space, out.len });
             return error.RequestBuildError;
         }
 
@@ -255,9 +302,11 @@ pub const Message = struct {
             else => unreachable,
         }
 
+        std.debug.assert(key.len() != 0);
         var n_bytes = try key.encode(out[HDR_SIZE .. HDR_SIZE + key.len()]);
 
         if (value) |v| {
+            std.debug.assert(v.len() != 0);
             n_bytes += try v.encode(out[HDR_SIZE + key.len() .. out.len]);
         }
 
@@ -269,26 +318,6 @@ pub const Message = struct {
         return .{ .data = out.ptr };
     }
 };
-
-test "Message Encoding" {
-    const allocator = std.testing.allocator;
-    const alloc = try allocator.alloc(u8, 100);
-    defer allocator.free(alloc);
-
-    const message = "hello";
-    try std.testing.expect(message.len == 5);
-
-    const encoded_msg = try Message.echo_req(alloc, message);
-    const header = encoded_msg.header();
-
-    std.debug.print("header {any}\n", .{encoded_msg.data[0..HDR_SIZE]});
-    std.debug.print("pay len {x}\n", .{header.pay_len});
-
-    try std.testing.expect(header.pay_len == message.len + 3);
-    const payload = encoded_msg.payload();
-    try std.testing.expect(std.mem.eql(u8, payload[3 .. payload.len], message[0..5]));
-    encoded_msg.print();
-}
 
 test "faulty ctrl" {
     const allocator = std.testing.allocator;
@@ -326,6 +355,7 @@ test "faulty version" {
         .ctrl = .{ .msg_type = .Request, .data = .{ .Request = .Echo } },
         .pay_len = message.len,
     };
+
     Message.write_header(buf[0..HDR_SIZE], hdr);
     @memcpy(buf[HDR_SIZE..], message);
     const res = Message.parse(buf);

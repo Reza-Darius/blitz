@@ -97,7 +97,7 @@ pub const HashMap = struct {
             .entry = new,
         };
 
-        debug("inserting {any}\n", .{cur_bucket});
+        debug("inserting entry\n", .{});
 
         var i: u32 = index(c, cur_bucket.hash);
         var old: ?*Entry = null;
@@ -134,6 +134,7 @@ pub const HashMap = struct {
     /// retrieves an entry from the table, the caller is not responsible for deallocation
     pub fn get(self: HashMap, key: []const u8) ?*Entry {
         std.debug.assert(key.len != 0);
+        std.log.debug("retrieving key from map\n", .{});
 
         const c = self.data.len;
         const cur_hash = hash(key);
@@ -143,14 +144,17 @@ pub const HashMap = struct {
 
         while (self.data[i].entry != null) {
             if (psl > self.data[i].psl) {
-                return null;
+                break;
             }
             if (self.data[i].hash == cur_hash) {
+                std.log.debug("found key!\n", .{});
                 return self.data[i].entry;
             }
             i = index(c, i + 1);
             psl += 1;
         }
+
+        std.log.debug("key not found!\n", .{});
         return null;
     }
 
@@ -485,7 +489,6 @@ test "hashmap duplicate insert" {
     defer map.deinit();
 
     const s1 = [_][]const u8{ "hello", "world" };
-
 
     for (0..c) |_| {
         try map.insert(s1[0], s1[1]);
