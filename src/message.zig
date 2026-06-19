@@ -176,13 +176,6 @@ pub const Message = struct {
         return new_request(out, .Echo, du, null);
     }
 
-    pub fn write(self: Message, writer: *std.Io.Writer) !void {
-        const hdr = self.header();
-        const bytes = self.data[0 .. HDR_SIZE + hdr.pay_len];
-        try writer.writeAll(bytes);
-        return;
-    }
-
     pub fn as_slice(self: Message) []u8 {
         const hdr = self.header();
         return self.data[0 .. HDR_SIZE + hdr.pay_len];
@@ -207,7 +200,6 @@ pub const Message = struct {
 
         var response_hdr: Header = .{ .version = SUPPORTED_VERSION, .ctrl = .{ .msg_type = .Response, .data = undefined }, .pay_len = 0 };
 
-        // write header CTRL
         response_hdr.ctrl.data = switch (code) {
             .Ok => .{
                 .Response = .Ok,
@@ -242,7 +234,7 @@ pub const Message = struct {
         }
 
         if (out.len < needed_space) {
-            std.log.err("failed to construct request: out buffer is too small\n", .{});
+            std.log.err("failed to construct request: out buffer is too small, needed={}, got={}\n", .{needed_space, out.len});
             return error.RequestBuildError;
         }
 
@@ -280,19 +272,21 @@ pub const Message = struct {
 
 test "Message Encoding" {
     const allocator = std.testing.allocator;
-    const alloc = try allocator.alloc(u8, 10);
+    const alloc = try allocator.alloc(u8, 100);
     defer allocator.free(alloc);
 
     const message = "hello";
     try std.testing.expect(message.len == 5);
 
-    const encoded_msg = try Message.encode_echo_req(alloc, message);
+    const encoded_msg = try Message.echo_req(alloc, message);
     const header = encoded_msg.header();
+
     std.debug.print("header {any}\n", .{encoded_msg.data[0..HDR_SIZE]});
     std.debug.print("pay len {x}\n", .{header.pay_len});
 
-    try std.testing.expect(header.pay_len == message.len);
-    try std.testing.expect(std.mem.eql(u8, encoded_msg.data[HDR_SIZE .. HDR_SIZE + header.pay_len], message[0..5]));
+    try std.testing.expect(header.pay_len == message.len + 3);
+    const payload = encoded_msg.payload();
+    try std.testing.expect(std.mem.eql(u8, payload[3 .. payload.len], message[0..5]));
     encoded_msg.print();
 }
 

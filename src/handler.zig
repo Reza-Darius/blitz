@@ -112,13 +112,14 @@ pub fn handle_read(con: *Connection) void {
         parsed_requests += 1;
     }
 
-    if (con.rcv_buf.is_empty()) {
-        con.rcv_buf.clear();
-    }
 
     if (parsed_requests > 0) {
         debug("writing {} responses\n", .{parsed_requests});
         handle_write(con);
+    }
+
+    if (con.rcv_buf.is_empty()) {
+        con.rcv_buf.clear();
     }
     return;
 }

@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{});
+    const target = b.graph.host;
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
@@ -73,7 +73,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             // List of modules available for import in source files part of the
             // root module.
-            .link_libc = true,
             .imports = &.{
                 // Here "blitz" is the name you will use in your source code to
                 // import this module (e.g. `@import("blitz")`). The name is
@@ -85,14 +84,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const client_exe = b.addExecutable(.{ .name = "blitz-client", .root_module = b.createModule(.{ .root_source_file = b.path("src/bin/client.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blitz", .module = mod }} }) });
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(server_exe);
-    b.installArtifact(client_exe);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -172,20 +169,20 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const client_exe_check = b.addExecutable(.{
-        .name = "client-check",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/bin/client.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "blitz", .module = mod },
-            },
-        }),
-    });
+    // const client_exe_check = b.addExecutable(.{
+    //     .name = "client-check",
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("src/bin/client.zig"),
+    //         .target = target,
+    //         .optimize = optimize,
+    //         .imports = &.{
+    //             .{ .name = "blitz", .module = mod },
+    //         },
+    //     }),
+    // });
     const check = b.step("check", "Check if blitz compiles");
     check.dependOn(&server_exe_check.step);
-    check.dependOn(&client_exe_check.step);
+    // check.dependOn(&client_exe_check.step);
     check.dependOn(&mod_tests.step);
     check.dependOn(&exe_tests.step);
 }
