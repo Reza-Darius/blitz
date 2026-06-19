@@ -105,12 +105,20 @@ pub const Buf = struct {
         return;
     }
 
-    /// gets a slice to the written between lo and hi
-    pub fn get_slice(self: Buf) ?[]u8 {
+    /// gets a slice to the written data between lo and hi
+    pub fn get_data(self: Buf) ?[]u8 {
         if (self.is_empty()) {
             return null;
         }
-        return self.data[self.lo..self.lo + self.hi];
+        return self.data[self.lo .. self.lo + self.hi];
+    }
+
+    /// gets a slice to free data ready for writing, caller should call read_n() after to move the lo bound
+    pub fn get_free_slice(self: Buf) ?[]u8 {
+        if (self.is_empty()) {
+            return null;
+        }
+        return self.data[self.hi .. self.cap()];
     }
 
     pub fn clear(self: *Buf) void {
@@ -127,8 +135,8 @@ pub const Buf = struct {
         return self.hi == self.lo;
     }
 
-    /// advances lo bound
-    pub fn read_n(self: *Buf, n: u16) void {
+    /// advances lo bound for reads and writes
+    pub fn move_lo(self: *Buf, n: u16) void {
         if (n > self.hi or self.is_empty()) {
             @panic("out of bounds read_n()");
         }

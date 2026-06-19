@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const DataUnit = @import("datatypes.zig").DataUnit;
 
 const sys = std.os.linux;
 const posix = std.posix;
@@ -11,7 +12,6 @@ const HDR_INT = @typeInfo(Header).@"struct".backing_integer.?;
 const HDR_SIZE = hdr_size();
 
 const MAX_MSG_LEN = 512;
-const PAYLOAD_MIN_SIZE = 1;
 
 fn hdr_size() comptime_int {
     const bits = @bitSizeOf(HDR_INT);
@@ -21,10 +21,11 @@ fn hdr_size() comptime_int {
     return bits / 8;
 }
 
+// schema in bits: [2b Version][1b MsgType][5b CTRL data][16b pay len][...]
 pub const Header = packed struct(u24) {
-    version: Version,
+    version: Version = SUPPORTED_VERSION,
     ctrl: CTRL,
-    pay_len: u16,
+    pay_len: u16 = 0,
 };
 
 const SUPPORTED_VERSION = Version.V1;
@@ -55,9 +56,11 @@ pub const CTRL = packed struct(u6) {
     pub const ResponseCode = enum(u5) {
         Ok,
         Err,
+        NotFound,
+        InvalidData,
         // this field enables printing, should be deprecated
         _,
-};
+    };
 
     fn validate(ctrl: CTRL) MessageError!void {
         const req_fields_len = comptime @typeInfo(RequestCMD).@"enum".fields.len;
@@ -96,12 +99,13 @@ pub const CTRL = packed struct(u6) {
     }
 };
 
-
 pub const Message = struct {
     data: [*]u8,
 
     pub fn parse(data: []u8) MessageError!Message {
-        if (data.len < HDR_SIZE + PAYLOAD_MIN_SIZE) {
+        std.debug.assert(data.len != 0);
+
+        if (data.len < HDR_SIZE) {
             return error.IncompleteMessage;
         }
 
@@ -133,10 +137,6 @@ pub const Message = struct {
             return error.InvalidMessageSize;
         }
 
-        if (hdr.pay_len < PAYLOAD_MIN_SIZE) {
-            std.log.err("invalid pay_len {}", .{hdr.pay_len});
-            return error.HeaderParseError;
-        }
         return hdr;
     }
 
@@ -206,7 +206,49 @@ pub const Message = struct {
     }
 
     pub fn len(self: Message) u16 {
-        return std.mem.readInt(u16, self.data[0..2], .big) + HDR_SIZE;
+        const hdr = self.header();
+        return hdr.pay_len + HDR_SIZE;
+    }
+
+    pub fn payload(self: Message) []u8 {
+        const hdr = self.header();
+        return self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len];
+    }
+
+    /// returns Message pointer into written response
+    pub fn write_response(out: []u8, code: CTRL.ResponseCode, data: ?[]u8) !Message {
+        if (out.len < HDR_SIZE) {
+            std.log.err("passed out buffer has insufficient size {}\n", .{out.len});
+            return error.ResponseWriteErro;
+        }
+
+        var response_hdr: Header = .{ .version = SUPPORTED_VERSION, .ctrl = .{ .msg_type = .Response }, .pay_len = 0 };
+
+        // write header
+        switch (code) {
+            .Ok => {
+                response_hdr.ctrl = .{
+                    .data = CTRL.ResponseCode.Ok,
+                };
+            },
+            .Err => {
+                response_hdr.ctrl = .{
+                    .data = CTRL.ResponseCode.Err,
+                };
+            },
+            .NotFound => {},
+        }
+
+        write_header(out[0..HDR_SIZE], response_hdr);
+
+        if (data) |d| {
+            response_hdr = @intCast(d.len());
+            @memcpy(out[HDR_SIZE..out.len], d);
+        }
+
+        return .{
+            .data = out.ptr,
+        };
     }
 };
 

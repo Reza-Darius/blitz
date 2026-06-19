@@ -3,6 +3,9 @@ const utils = @import("utils.zig");
 const server = @import("server.zig");
 const Message = @import("message.zig").Message;
 const so = @import("socket.zig");
+const HashMap = @import("hashmap.zig").HashMap;
+const DataUnit = @import("datatypes.zig").DataUnit;
+const ResponseCode = @import("message.zig").CTRL.ResponseCode;
 
 const sys = std.os.linux;
 const posix = std.posix;
@@ -18,7 +21,7 @@ const check = utils.check_syscall;
 const Allocator = std.mem.Allocator;
 const Connection = server.Connection;
 
-pub fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd) !*Connection {
+pub fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd, map: *HashMap) !*Connection {
     var client_addr: sys.sockaddr.in = undefined;
     var addrlen: sys.socklen_t = @sizeOf(sys.sockaddr.in);
     var rc = sys.accept(li_fd, @ptrCast(&client_addr), &addrlen);
@@ -35,9 +38,8 @@ pub fn accept_client(allocator: Allocator, n_fds: u16, li_fd: fd, epoll_fd: fd) 
 
     try so.set_fd_nonblock(con_fd);
 
-    const con = try Connection.init(allocator, con_fd, &client_addr);
+    const con = try Connection.init(allocator, con_fd, &client_addr, map);
     errdefer con.deinit();
-
 
     var event: epoll_event = undefined;
     event.data.fd = con_fd;
@@ -56,9 +58,11 @@ pub fn handle_read(con: *Connection) void {
         con.state = .wants_close;
     }
 
-    const cap: usize = con.rcv_buf.cap();
-    const buf: [*]u8 = con.rcv_buf.data.ptr + con.rcv_buf.hi;
-    const rc = sys.read(con.fd, buf, cap);
+    // const cap: usize = con.rcv_buf.cap();
+    // const buf: [*]u8 = con.rcv_buf.data.ptr + con.rcv_buf.hi;
+
+    const buf = con.rcv_buf.get_free_slice().?;
+    const rc = sys.read(con.fd, buf.ptr, buf.len);
 
     switch (sys.errno(rc)) {
         .SUCCESS => {
@@ -81,23 +85,33 @@ pub fn handle_read(con: *Connection) void {
         },
     }
 
-    while (con.rcv_buf.get_slice()) |s| {
-        const msg = Message.parse(s) catch |err| {
-            if (err == error.IncompleteMessage) {
-                debug("couldnt parse message, waiting for more data, {}", .{err});
-                break;
-            } else {
-                l_err("parse error {}", .{err});
-                return;
-            }
-        };
+    // pipeline width, amount of messages to be processed at a time
+    const MAX_MSG = 3;
+    var requests: [MAX_MSG]Message = undefined;
+    var queued_msgs: u8 = 0;
 
-        msg.print_info("received message ");
-        write_response(con, &msg) catch |err| {
-            l_err("couldnt write echo response, err {}", .{err});
-        };
+    for (0..MAX_MSG) |i| {
+        if (con.rcv_buf.get_data()) |s| {
+            const msg = Message.parse(s) catch |err| {
+                if (err == error.IncompleteMessage) {
+                    debug("couldnt parse message, waiting for more data, {}", .{err});
+                    break;
+                } else {
+                    l_err("parse error {}", .{err});
+                    return;
+                }
+            };
 
-        con.rcv_buf.read_n(msg.len());
+            msg.print_info("received message ");
+            con.rcv_buf.move_lo(msg.len());
+
+            requests[i] = msg;
+        }
+        queued_msgs += 1;
+    }
+
+    for (0..queued_msgs) |i| {
+        try process_message(con, requests[i]);
     }
 
     if (con.rcv_buf.is_empty()) {
@@ -105,7 +119,7 @@ pub fn handle_read(con: *Connection) void {
     }
 
     if (!con.snd_buf.is_empty()) {
-        debug("snd buffer, wanting to write", .{});
+        debug("writing {} responses\n", .{queued_msgs});
         handle_write(con);
     }
     return;
@@ -116,7 +130,7 @@ pub fn handle_write(con: *Connection) void {
         warn("snd buffer is empty", .{});
         con.state = .wants_read;
     }
-    const data = con.snd_buf.get_slice().?;
+    const data = con.snd_buf.get_data().?;
     const rc = sys.write(con.fd, data.ptr, data.len);
 
     switch (sys.errno(rc)) {
@@ -128,7 +142,7 @@ pub fn handle_write(con: *Connection) void {
                 return;
             }
             debug("nbytes written: {}", .{rc});
-            con.snd_buf.read_n(@intCast(rc));
+            con.snd_buf.move_lo(@intCast(rc));
         },
         .AGAIN => {
             // cant write at this time
@@ -150,8 +164,75 @@ pub fn handle_write(con: *Connection) void {
     return;
 }
 
-pub fn write_response(con: *Connection, msg: *const Message) !void {
-    try con.snd_buf.append(msg.as_slice());
+pub fn process_message(con: *Connection, msg: Message) !void {
+    std.debug.assert(!con.snd_buf.is_full());
+
+    const hdr = msg.header();
+    const payload = msg.payload();
+
+    if (hdr.ctrl.msg_type == .Response) {
+        l_err("got a response, expected request", .{});
+        return error.InvalidMessage;
+    }
+
+    var resp_code: ResponseCode = undefined;
+    var resp_data: ?[]u8 = null;
+
+    const req_data = DataUnit.decode(payload) catch |err| {
+        l_err("invalid data for request {}\n", .{err});
+
+        resp_code = .InvalidData;
+        return;
+    };
+
+    switch (hdr.ctrl.data.Request) {
+        .Echo => {
+            info("processing echo request\n", .{});
+
+            resp_code = .Ok;
+            resp_data = msg.as_slice();
+        },
+        .Get => {
+            info("processing get request\n", .{});
+
+            if (con.map.get(payload[0..req_data.len()])) |e| {
+                resp_code = .Ok;
+                resp_data = e.get_val();
+            } else {
+                resp_code = .NotFound;
+            }
+        },
+        .Set => {
+            info("processing set request\n", .{});
+
+            const value = try DataUnit.decode(payload[req_data.len()..@as(u32, @intCast(payload.len))]) catch |err| {
+                l_err("invalid value data for set request {}\n", .{err});
+
+                resp_code = .InvalidData;
+                return;
+            };
+
+            try con.map.insert(req_data.as_slice(), value.as_slice());
+            resp_code = .Ok;
+        },
+        .Del => {
+            info("processing del request\n", .{});
+
+            if (con.map.remove(req_data.as_slice())) |e| {
+                resp_code = .Ok;
+                // could alternatively return value that was removed
+                e.destroy(con.al);
+            } else {
+                resp_code = .NotFound;
+            }
+        },
+
+        else => unreachable,
+    }
+
+    const write_slice = con.snd_buf.get_free_slice();
+    const resp = try Message.write_response(write_slice, resp_code, resp_data);
+    con.snd_buf.move_lo(resp.len());
 
     return;
 }

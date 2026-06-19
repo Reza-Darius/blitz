@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const handler = @import("handler.zig");
 const so = @import("socket.zig");
 const message = @import("message.zig");
+const HashMap = @import("hashmap.zig").HashMap;
 
 const sys = std.os.linux;
 
@@ -25,12 +26,14 @@ pub const CON_BUF_SIZE: u16 = 2048;
 
 pub const Server = struct {
     addr: std.Io.net.IpAddress,
+    map: HashMap,
     allocator: Allocator,
 
     /// initializes a listening server
     pub fn init(allocator: Allocator, addr: std.Io.net.IpAddress) !Server {
         return .{
             .addr = addr,
+            .map = try HashMap.init(allocator, 1024),
             .allocator = allocator,
         };
     }
@@ -80,7 +83,7 @@ pub const Server = struct {
                 const con = con_table[@intCast(ev.data.fd)];
 
                 if (ev.data.fd == li_sock) {
-                    const new_con = handler.accept_client(self.allocator, n_fds, li_sock, epoll_fd) catch |err| {
+                    const new_con = handler.accept_client(self.allocator, n_fds, li_sock, epoll_fd, &self.map) catch |err| {
                         l_err("accept client error {}", .{err});
                         continue;
                     };
@@ -143,6 +146,7 @@ pub const Connection = struct {
 
     snd_buf: utils.Buf,
     rcv_buf: utils.Buf,
+    map: *HashMap,
 
     const ConState = enum {
         wants_read,
@@ -150,7 +154,7 @@ pub const Connection = struct {
         wants_close,
     };
 
-    pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in) !*Connection {
+    pub fn init(allocator: Allocator, client_fd: fd, addr: *sys.sockaddr.in, map: *HashMap) !*Connection {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const a = arena.allocator();
         const con = try a.create(Connection);
@@ -161,6 +165,7 @@ pub const Connection = struct {
             .al = arena,
             .snd_buf = try utils.Buf.init(a, CON_BUF_SIZE),
             .rcv_buf = try utils.Buf.init(a, CON_BUF_SIZE),
+            .map = map,
         };
         return con;
     }
