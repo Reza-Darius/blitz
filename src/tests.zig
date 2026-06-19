@@ -1,6 +1,8 @@
 const std = @import("std");
 const Message = @import("root.zig").Message;
 
+const srv_addr = "127.0.0.1:4000";
+
 test "echo request" {
     std.testing.log_level = .err;
     const al = std.testing.allocator;
@@ -8,7 +10,7 @@ test "echo request" {
 
     const n_msgs = 10;
 
-    const addr = try std.Io.net.IpAddress.parseLiteral("127.0.0.1:4000");
+    const addr = try std.Io.net.IpAddress.parseLiteral(srv_addr);
     const write_buf = try al.alloc(u8, 200);
     defer al.free(write_buf);
 
