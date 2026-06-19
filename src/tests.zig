@@ -66,20 +66,31 @@ test "set and get" {
 
 
     const get_req = try Message.new_request(write_buf, .Get, .string_to_unit("Key"), null);
-
     try writer.interface.writeAll(get_req.as_slice());
 
     const get_res = try reader.interface.readAlloc(al, 11);
     defer al.free(get_res);
 
     const get_resp = try Message.parse(get_res);
-    const hdr = get_resp.header();
+    const get_hdr = get_resp.header();
     const get_pay = get_resp.payload();
     const du = try DataUnit.decode(get_pay);
 
-    try std.testing.expect(hdr.ctrl.msg_type == .Response);
-    try std.testing.expect(hdr.is_ok());
+    try std.testing.expect(get_hdr.ctrl.msg_type == .Response);
+    try std.testing.expect(get_hdr.is_ok());
     try std.testing.expect(du == DataUnit.String);
     try std.testing.expect(du.len() == 3 + 5);
     try std.testing.expect(std.mem.eql(u8, get_pay[3..get_pay.len], "Value"));
+
+    const del_req = try Message.new_request(write_buf, .Del, .string_to_unit("Key"), null);
+    try writer.interface.writeAll(del_req.as_slice());
+
+    const del_res = try reader.interface.readAlloc(al, 3);
+    defer al.free(del_res);
+
+    const del_resp = try Message.parse(del_res);
+    const del_hdr = del_resp.header();
+
+    try std.testing.expect(del_hdr.ctrl.msg_type == .Response);
+    try std.testing.expect(del_hdr.is_ok());
 }
