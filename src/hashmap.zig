@@ -76,25 +76,38 @@ pub const HashMap = struct {
         std.debug.assert(value.len != 0);
 
         const e = try Entry.encode(self.al, key, value);
-        self.insert_helper(e);
-        self.len += 1;
+
+        if (self.insert_helper(e)) |old| {
+            // duplicate found
+            old.destroy(self.al);
+        } else {
+            self.len += 1;
+        }
+
         try self.check_grow();
         return;
     }
 
-    fn insert_helper(self: *HashMap, e: *Entry) void {
+    fn insert_helper(self: *HashMap, new: *Entry) ?*Entry {
         const c = self.data.len;
+
         var cur_bucket: Bucket = .{
             .psl = 0,
-            .hash = hash(e.get_key()),
-            .entry = e,
+            .hash = hash(new.get_key()),
+            .entry = new,
         };
 
         debug("inserting {any}\n", .{cur_bucket});
 
         var i: u32 = index(c, cur_bucket.hash);
+        var old: ?*Entry = null;
 
         while (self.data[i].entry != null) {
+            if (self.data[i].hash == cur_bucket.hash) {
+                old = self.data[i].entry;
+                std.debug.assert(self.data[i].psl == cur_bucket.psl);
+                break;
+            }
             debug("checking idx {} with psl {}\n", .{ i, cur_bucket.psl });
             debug("colliding with bucket {any}, at {}\n", .{ self.data[i], i });
 
@@ -115,7 +128,7 @@ pub const HashMap = struct {
         debug("found place at {}\n", .{i});
 
         self.data[i] = cur_bucket;
-        return;
+        return old;
     }
 
     /// retrieves an entry from the table, the caller is not responsible for deallocation
@@ -216,7 +229,7 @@ pub const HashMap = struct {
         for (0..self.len) |i| {
             const slot = old_map[i];
             if (slot.entry) |e| {
-                self.insert_helper(e);
+                _ = self.insert_helper(e);
             }
         }
 
@@ -459,4 +472,29 @@ test "hashmap regrow" {
     map.print();
     std.debug.assert(map.len == n_keys);
     std.debug.assert(map.data.len == c * 2);
+}
+
+test "hashmap duplicate insert" {
+    std.testing.log_level = .debug;
+
+    const alloc = std.testing.allocator;
+    const c = 8;
+    std.debug.assert((c & (c - 1)) == 0);
+
+    var map = try HashMap.init(alloc, c);
+    defer map.deinit();
+
+    const s1 = [_][]const u8{ "hello", "world" };
+
+
+    for (0..c) |_| {
+        try map.insert(s1[0], s1[1]);
+        try std.testing.expect(map.len == 1);
+    }
+
+    map.print();
+    try std.testing.expect(map.len == 1);
+    const res1 = map.get(s1[0]).?;
+    try std.testing.expect(std.mem.eql(u8, res1.get_key(), s1[0]));
+    try std.testing.expect(std.mem.eql(u8, res1.get_val(), s1[1]));
 }
