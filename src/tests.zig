@@ -18,8 +18,6 @@ test "echo request" {
     const con = try addr.connect(io, .{ .mode = .stream });
     defer con.close(io);
 
-    std.log.info("connected to {}\n", .{addr});
-
     var writer = con.writer(io, &.{});
 
     for (0..n_msgs) |_| {
@@ -33,6 +31,6 @@ test "echo request" {
         defer al.free(res);
 
         const resp_msg = try Message.parse(res);
-        resp_msg.print_info("got in response: ");
+        try std.testing.expect(std.mem.eql(u8, resp_msg.payload(), encoded_msg.payload()));
     }
 }
