@@ -1,16 +1,20 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const server = @import("server.zig");
-const Message = @import("message.zig").Message;
+const message = @import("message.zig");
 const so = @import("socket.zig");
-const HashMap = @import("hashmap.zig").HashMap;
-const DataUnit = @import("datatypes.zig").DataUnit;
-const ResponseCode = @import("message.zig").CTRL.ResponseCode;
+const hashmap = @import("hashmap.zig");
+const datatypes = @import("datatypes.zig");
 
 const sys = std.os.linux;
 const posix = std.posix;
+
 const fd = sys.fd_t;
 const epoll_event = sys.epoll_event;
+const HashMap = hashmap.HashMap;
+const DataUnit = datatypes.DataUnit;
+const Message = message.Message;
+const ResponseCode = message.CTRL.ResponseCode;
 
 const info = std.log.info;
 const debug = std.log.debug;
