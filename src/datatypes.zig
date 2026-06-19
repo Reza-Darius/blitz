@@ -5,7 +5,7 @@ const l_err = std.log.err;
 // schema: [1 Byte DataType][x Bytes Data]
 pub const DataUnit = union(DataType) {
     String: struct {
-        len: u16,
+        s_len: u16,
         data: [*]const u8,
     },
     Integer: i64,
@@ -13,7 +13,7 @@ pub const DataUnit = union(DataType) {
     Boolean: bool,
 
     Array: struct {
-        len: u16,
+        n_elem: u16,
         data: [*]const DataUnit,
     },
 
@@ -70,13 +70,13 @@ pub const DataUnit = union(DataType) {
         }
 
         return DataUnit{ .String = .{
-            .len = slen,
+            .s_len = slen,
             .data = data.ptr + s_sl,
         } };
     }
 
     fn parse_int(data: []const u8) !DataUnit {
-        if (data.len < @sizeOf(i64)) {
+        if (data.len < s_in) {
             l_err("infalid data len for integer", .{});
             return error.IntegerParseError;
         }
@@ -84,11 +84,12 @@ pub const DataUnit = union(DataType) {
     }
 
     fn parse_float(data: []const u8) !DataUnit {
-        if (data.len < @sizeOf(f64)) {
+        if (data.len < s_fl) {
             l_err("infalid data len for float", .{});
             return error.FloatParseError;
         }
-        return DataUnit{ .Integer = std.mem.readInt(f64, data[0..s_fl], .big) };
+        const x = std.mem.readInt(i64, data[0..s_fl], .big);
+        return DataUnit{ .Float = @bitCast(x) };
     }
 
     fn parse_bool(data: u8) !DataUnit {
@@ -125,17 +126,20 @@ pub const DataUnit = union(DataType) {
     // writes the dataunit as bytes to out
     pub fn encode(self: DataUnit, out: []u8) !u32 {
         return switch (self) {
-            .String => |v| encode_string(out, v.len, v.data),
+            .String => |v| encode_string(out, v.s_len, v.data),
             .Integer => |v| encode_int(out, v),
             .Float => |v| encode_float(out, v),
             .Boolean => |v| encode_bool(out, v),
+            else => {
+                @panic("not yet implemented");
+            }
         };
     }
 
-    fn encode_string(out: []u8, slen: u16, data: [*]u8) !u32 {
+    fn encode_string(out: []u8, slen: u16, data: [*]const u8) !u32 {
         const size = slen + s_sl + s_dt;
         if (out.len < size) {
-            l_err("invalid out length for string encoding");
+            l_err("invalid out length for string encoding\n", .{});
             return error.EncodeStringError;
         }
         out[0] = @intFromEnum(DataType.String);
@@ -147,7 +151,7 @@ pub const DataUnit = union(DataType) {
     fn encode_int(out: []u8, data: i64) !u32 {
         const size = s_in + s_dt;
         if (out.len < size) {
-            l_err("invalid out length for integer encoding");
+            l_err("invalid out length for integer encoding\n", .{});
             return error.EncodeStringError;
         }
         out[0] = @intFromEnum(DataType.Integer);
@@ -158,18 +162,19 @@ pub const DataUnit = union(DataType) {
     fn encode_float(out: []u8, data: f64) !u32 {
         const size = s_fl + s_dt;
         if (out.len < size) {
-            l_err("invalid out length for float encoding");
+            l_err("invalid out length for float encoding\n", .{});
             return error.EncodeStringError;
         }
         out[0] = @intFromEnum(DataType.Float);
-        std.mem.writeInt(f64, out[1 .. 1 + s_fl], data, .big);
+        const x: i64 = @bitCast(data);
+        std.mem.writeInt(i64, out[1 .. 1 + s_fl], x, .big);
         return size;
     }
 
     fn encode_bool(out: []u8, data: bool) !u32 {
         const size = s_bo + s_dt;
         if (out.len < size) {
-            l_err("invalid out length for bool encoding");
+            l_err("invalid out length for bool encoding\n", .{});
             return error.EncodeStringError;
         }
         out[0] = @intFromEnum(DataType.Boolean);
@@ -177,18 +182,22 @@ pub const DataUnit = union(DataType) {
         return size;
     }
 
-    pub fn len(self: *DataType) u32 {
-        return switch (self) {
-            .String => |*v| 1 + 2 + v.len,
-            .Integer, .Float => 1 + 4,
-            .Boolean => 1 + 1,
+    pub fn len(self: *const DataUnit) u32 {
+        return switch (self.*) {
+            .String => |*v| s_dt + s_sl + v.s_len,
+            .Integer, .Float => s_dt + s_fl,
+            .Boolean => s_dt + s_bo,
+
+            else => {
+                @panic("not supported data type yet");
+            }
         };
     }
 
     pub fn string_to_unit(msg: []const u8,) DataUnit {
         return .{
             .String = .{
-                .len = msg.len,
+                .s_len = @intCast(msg.len),
                 .data = msg.ptr
             }
         };

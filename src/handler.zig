@@ -73,7 +73,7 @@ pub fn handle_read(con: *Connection) void {
                 return;
             }
             con.rcv_buf.hi += @intCast(rc);
-            debug("success: read bytes: {}", .{rc});
+            debug("success: read bytes to snd buffer: {}", .{rc});
         },
         .AGAIN => {
             // no data read, we wait for more
@@ -85,41 +85,35 @@ pub fn handle_read(con: *Connection) void {
         },
     }
 
-    // pipeline width, amount of messages to be processed at a time
-    const MAX_MSG = 3;
-    var requests: [MAX_MSG]Message = undefined;
-    var queued_msgs: u8 = 0;
+    var parsed_requests: u8 = 0;
+    while (con.rcv_buf.get_data()) |data| {
+        const msg = Message.parse(data) catch |err| {
+            if (err == error.IncompleteMessage) {
+                debug("couldnt parse message, waiting for more data, {}", .{err});
+                con.state = .wants_read;
+                break;
+            } else {
+                l_err("parse error {}", .{err});
+                return;
+            }
+        };
 
-    for (0..MAX_MSG) |i| {
-        if (con.rcv_buf.get_data()) |s| {
-            const msg = Message.parse(s) catch |err| {
-                if (err == error.IncompleteMessage) {
-                    debug("couldnt parse message, waiting for more data, {}", .{err});
-                    break;
-                } else {
-                    l_err("parse error {}", .{err});
-                    return;
-                }
-            };
+        process_request(con, msg) catch |err| {
+            l_err("proccessing failed: {}\n", .{err});
+            @panic("processing failed");
+        };
 
-            msg.print_info("received message ");
-            con.rcv_buf.move_lo(msg.len());
-
-            requests[i] = msg;
-        }
-        queued_msgs += 1;
-    }
-
-    for (0..queued_msgs) |i| {
-        try process_message(con, requests[i]);
+        msg.print_info("received message ");
+        con.rcv_buf.read_n(msg.len());
+        parsed_requests += 1;
     }
 
     if (con.rcv_buf.is_empty()) {
         con.rcv_buf.clear();
     }
 
-    if (!con.snd_buf.is_empty()) {
-        debug("writing {} responses\n", .{queued_msgs});
+    if (parsed_requests > 0) {
+        debug("writing {} responses\n", .{parsed_requests});
         handle_write(con);
     }
     return;
@@ -130,6 +124,7 @@ pub fn handle_write(con: *Connection) void {
         warn("snd buffer is empty", .{});
         con.state = .wants_read;
     }
+
     const data = con.snd_buf.get_data().?;
     const rc = sys.write(con.fd, data.ptr, data.len);
 
@@ -141,8 +136,8 @@ pub fn handle_write(con: *Connection) void {
                 con.state = .wants_close;
                 return;
             }
-            debug("nbytes written: {}", .{rc});
-            con.snd_buf.move_lo(@intCast(rc));
+            debug("nbytes written to fd: {}", .{rc});
+            con.snd_buf.read_n(@intCast(rc));
         },
         .AGAIN => {
             // cant write at this time
@@ -164,7 +159,7 @@ pub fn handle_write(con: *Connection) void {
     return;
 }
 
-pub fn process_message(con: *Connection, msg: Message) !void {
+pub fn process_request(con: *Connection, msg: Message) !void {
     std.debug.assert(!con.snd_buf.is_full());
 
     const hdr = msg.header();
@@ -176,7 +171,7 @@ pub fn process_message(con: *Connection, msg: Message) !void {
     }
 
     var resp_code: ResponseCode = undefined;
-    var resp_data: ?[]u8 = null;
+    var resp_data: ?[]const u8 = null;
 
     const req_data = DataUnit.decode(payload) catch |err| {
         l_err("invalid data for request {}\n", .{err});
@@ -188,9 +183,10 @@ pub fn process_message(con: *Connection, msg: Message) !void {
     switch (hdr.ctrl.data.Request) {
         .Echo => {
             info("processing echo request\n", .{});
+            std.debug.assert(payload.len != 0);
 
             resp_code = .Ok;
-            resp_data = msg.as_slice();
+            resp_data = payload;
         },
         .Get => {
             info("processing get request\n", .{});
@@ -205,23 +201,23 @@ pub fn process_message(con: *Connection, msg: Message) !void {
         .Set => {
             info("processing set request\n", .{});
 
-            const value = try DataUnit.decode(payload[req_data.len()..@as(u32, @intCast(payload.len))]) catch |err| {
+            const value = DataUnit.decode(payload[req_data.len()..@as(u32, @intCast(payload.len))]) catch |err| {
                 l_err("invalid value data for set request {}\n", .{err});
 
                 resp_code = .InvalidData;
                 return;
             };
 
-            try con.map.insert(req_data.as_slice(), value.as_slice());
+            try con.map.insert(payload[0..req_data.len()], payload[req_data.len() .. req_data.len() + value.len()]);
             resp_code = .Ok;
         },
         .Del => {
             info("processing del request\n", .{});
 
-            if (con.map.remove(req_data.as_slice())) |e| {
+            if (con.map.remove(payload[0..req_data.len()])) |e| {
                 resp_code = .Ok;
                 // could alternatively return value that was removed
-                e.destroy(con.al);
+                e.destroy(con.map.al);
             } else {
                 resp_code = .NotFound;
             }
@@ -230,9 +226,11 @@ pub fn process_message(con: *Connection, msg: Message) !void {
         else => unreachable,
     }
 
-    const write_slice = con.snd_buf.get_free_slice();
+    const write_slice = con.snd_buf.get_free_slice().?;
     const resp = try Message.write_response(write_slice, resp_code, resp_data);
-    con.snd_buf.move_lo(resp.len());
+    con.snd_buf.written_n(resp.len());
+
+    debug("written {} byte msg into write slice\n", .{resp.len()});
 
     return;
 }

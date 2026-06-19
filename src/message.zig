@@ -171,26 +171,9 @@ pub const Message = struct {
         return;
     }
 
-    pub fn encode_msg(out: []u8, str: []const u8) MessageError!Message {
-        if (str.len > MAX_MSG_LEN) {
-            std.log.err("provided string exceeds max message length", .{});
-            return error.EncodeError;
-        }
-        if (str.len + HDR_SIZE > out.len) {
-            std.log.err("provided buffer is too small", .{});
-            return error.EncodeError;
-        }
-
-        const hdr: Header = .{
-            .version = .V1,
-            .ctrl = .{ .msg_type = .Request, .data = .{ .Request = .Echo } },
-            .pay_len = @as(u16, @intCast(str.len)),
-        };
-
-        Message.write_header(out[0..HDR_SIZE], hdr);
-        @memcpy(out[HDR_SIZE .. HDR_SIZE + hdr.pay_len], str);
-
-        return .{ .data = out.ptr };
+    pub fn echo_req(out: []u8, str: []const u8) !Message {
+        const du = DataUnit.string_to_unit(str);
+        return new_request(out, .Echo, du, null);
     }
 
     pub fn write(self: Message, writer: *std.Io.Writer) !void {
@@ -216,39 +199,82 @@ pub const Message = struct {
     }
 
     /// returns Message pointer into written response
-    pub fn write_response(out: []u8, code: CTRL.ResponseCode, data: ?[]u8) !Message {
+    pub fn write_response(out: []u8, code: CTRL.ResponseCode, data: ?[]const u8) !Message {
         if (out.len < HDR_SIZE) {
             std.log.err("passed out buffer has insufficient size {}\n", .{out.len});
             return error.ResponseWriteErro;
         }
 
-        var response_hdr: Header = .{ .version = SUPPORTED_VERSION, .ctrl = .{ .msg_type = .Response }, .pay_len = 0 };
+        var response_hdr: Header = .{ .version = SUPPORTED_VERSION, .ctrl = .{ .msg_type = .Response, .data = undefined }, .pay_len = 0 };
 
-        // write header
-        switch (code) {
-            .Ok => {
-                response_hdr.ctrl = .{
-                    .data = CTRL.ResponseCode.Ok,
-                };
+        // write header CTRL
+        response_hdr.ctrl.data = switch (code) {
+            .Ok => .{
+                .Response = .Ok,
             },
-            .Err => {
-                response_hdr.ctrl = .{
-                    .data = CTRL.ResponseCode.Err,
-                };
+            .Err => .{
+                .Response = .Err,
             },
-            .NotFound => {},
+            .NotFound => .{
+                .Response = .NotFound,
+            },
+
+            else => unreachable,
+        };
+
+        if (data) |d| {
+            response_hdr.pay_len = @intCast(d.len);
+            @memcpy(out[HDR_SIZE .. HDR_SIZE + d.len], d);
         }
 
         write_header(out[0..HDR_SIZE], response_hdr);
 
-        if (data) |d| {
-            response_hdr = @intCast(d.len());
-            @memcpy(out[HDR_SIZE..out.len], d);
-        }
-
         return .{
             .data = out.ptr,
         };
+    }
+
+    pub fn new_request(out: []u8, cmd: CTRL.RequestCMD, key: DataUnit, value: ?DataUnit) !Message {
+        var needed_space = HDR_SIZE + key.len();
+
+        if (value) |v| {
+            needed_space += v.len();
+        }
+
+        if (out.len < needed_space) {
+            std.log.err("failed to construct request: out buffer is too small\n", .{});
+            return error.RequestBuildError;
+        }
+
+        var req_hdr: Header = .{ .version = SUPPORTED_VERSION, .ctrl = .{ .msg_type = .Request, .data = undefined }, .pay_len = 0 };
+
+        switch (cmd) {
+            // placeholder for future logic
+            .Echo => {},
+            .Get => {},
+            .Set => {
+                if (value == null) {
+                    std.log.err("failed to construct request: no value provided for set cmd\n", .{});
+                    return error.RequestBuildError;
+                }
+            },
+            .Del => {},
+
+            else => unreachable,
+        }
+
+        var n_bytes = try key.encode(out[HDR_SIZE .. HDR_SIZE + key.len()]);
+
+        if (value) |v| {
+            n_bytes += try v.encode(out[HDR_SIZE + key.len() .. out.len]);
+        }
+
+        req_hdr.ctrl.data = .{ .Request = cmd };
+        req_hdr.pay_len = @intCast(n_bytes);
+        Message.write_header(out[0..HDR_SIZE], req_hdr);
+
+        std.log.debug("nbytes written {}\n", .{n_bytes});
+        return .{ .data = out.ptr };
     }
 };
 
@@ -260,7 +286,7 @@ test "Message Encoding" {
     const message = "hello";
     try std.testing.expect(message.len == 5);
 
-    const encoded_msg = try Message.encode_msg(alloc, message);
+    const encoded_msg = try Message.encode_echo_req(alloc, message);
     const header = encoded_msg.header();
     std.debug.print("header {any}\n", .{encoded_msg.data[0..HDR_SIZE]});
     std.debug.print("pay len {x}\n", .{header.pay_len});

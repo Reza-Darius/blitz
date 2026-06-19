@@ -115,10 +115,10 @@ pub const Buf = struct {
 
     /// gets a slice to free data ready for writing, caller should call read_n() after to move the lo bound
     pub fn get_free_slice(self: Buf) ?[]u8 {
-        if (self.is_empty()) {
+        if (self.is_full()) {
             return null;
         }
-        return self.data[self.hi .. self.cap()];
+        return self.data[self.hi..self.cap()];
     }
 
     pub fn clear(self: *Buf) void {
@@ -128,20 +128,28 @@ pub const Buf = struct {
     }
 
     pub fn is_full(self: *const Buf) bool {
-        return self.hi >= self.data.len;
+        return self.hi == self.data.len;
     }
 
-    pub fn is_empty(self: *const Buf) bool {
-        return self.hi == self.lo;
+    pub fn is_empty(self: Buf) bool {
+        return self.len() == 0;
     }
 
-    /// advances lo bound for reads and writes
-    pub fn move_lo(self: *Buf, n: u16) void {
-        if (n > self.hi or self.is_empty()) {
+    /// advances lo bound for reads
+    pub fn read_n(self: *Buf, n: u16) void {
+        if (n + self.lo > self.hi) {
             @panic("out of bounds read_n()");
         }
         self.lo += n;
-        std.debug.assert(self.lo <= self.hi);
+        return;
+    }
+
+    /// advances hi bound for writes
+    pub fn written_n(self: *Buf, n: u16) void {
+        if (n + self.hi > self.data.len) {
+            @panic("out of capacity write written_n()");
+        }
+        self.hi += n;
         return;
     }
 
@@ -165,8 +173,14 @@ pub const Buf = struct {
         return @intCast(self.data.len);
     }
 
+    /// retrieves the amount of unproccessed data
     pub fn len(self: Buf) u16 {
         return self.hi - self.lo;
+    }
+
+    /// retrieves the amount of free data left for writing
+    pub fn remain_len(self: Buf) u16 {
+        return self.data.len - self.hi;
     }
 };
 
