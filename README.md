@@ -8,7 +8,7 @@ Currently only supports x86-64 Linux systems.
 
 ```bash
 # build from source
-$ git clone "https://github.com/Reza-Darius/blitz" blitz
+$ git clone "https://github.com/Reza-Darius/blitz"
 $ cd blitz
 $ zig build
 $ cd zig-out/bin
