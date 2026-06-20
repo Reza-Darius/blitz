@@ -2,7 +2,7 @@
 
 An easy to use in-memory key value store inspired by Redis!
 
-Currently only supports x86-64 Linux systems.
+Currently only supports x86-64 Linux systems and requires the zig compiler.
 
 ## Hello World
 
