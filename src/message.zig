@@ -321,14 +321,14 @@ pub const Message = struct {
         const hdr = self.header();
         const pay = self.payload();
 
-        try writer.print("version={}, ", .{hdr.version});
+        try writer.print("version {}, ", .{hdr.version});
 
         switch (hdr.ctrl.msg_type) {
             .Request => {
-                try writer.print("Request: {}, ", .{hdr.ctrl.data.Request});
+                try writer.print("Request {}, ", .{hdr.ctrl.data.Request});
             },
             .Response => {
-                try writer.print("Response: {}, ", .{hdr.ctrl.data.Response});
+                try writer.print("Response {}, ", .{hdr.ctrl.data.Response});
             },
         }
         try writer.print("paylen={}, ", .{hdr.pay_len});
@@ -338,10 +338,10 @@ pub const Message = struct {
         while (pay.len - remaining > 0) {
             const du = DataUnit.decode(pay[remaining..pay.len]) catch unreachable;
             switch (du) {
-                .String => |*v| try writer.print("String, len = {}: {s}, ", .{ v.s_len, v.data[0..v.s_len] }),
-                .Integer => |v| try writer.print("Integer: {}, ", .{v}),
-                .Float => |v| try writer.print("Float: {}, ", .{v}),
-                .Boolean => |v| try writer.print("Bool: {}, ", .{v}),
+                .String => |*v| try writer.print("String, len {}, {s}, ", .{ v.s_len, v.data[0..v.s_len] }),
+                .Integer => |v| try writer.print("Integer {}, ", .{v}),
+                .Float => |v| try writer.print("Float {}, ", .{v}),
+                .Boolean => |v| try writer.print("Bool {}, ", .{v}),
                 else => unreachable,
             }
 

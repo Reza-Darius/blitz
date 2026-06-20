@@ -24,7 +24,7 @@ $ ./blitz-cli -c 127.0.0.4:3000 get hello
 version=.V1, Response: .Ok, paylen=9, Integer: 42
 ```
 
-currently supported operations:
+Supported operations:
 
 `GET [key]`, retrieves a value from the store
 
@@ -32,12 +32,12 @@ currently supported operations:
 
 `DEL [key]`, deletes an entry if it exists
 
-keys and values can be one of the following data types:
+Supported data types for keys and values:
 
 ```
-64 bit signed integer: 42
 boolean: true/false
-64 bit double precision floats: 1.825
+64 bit signed integer: 42
+64 bit precision floats: 1.825
 ascii encoded strings: hello
 ```
 
@@ -49,4 +49,4 @@ ascii encoded strings: hello
 - efficient allocation patterns through the use of arenas
 - binary serialization protocol
 - hand rolled hashtable with open addressing with robin hood hashing
-- zero dependencies outside the standard library
+- zero dependencies
