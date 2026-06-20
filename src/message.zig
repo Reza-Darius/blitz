@@ -238,7 +238,7 @@ pub const Message = struct {
     }
 
     /// returns Message pointer into written response
-    pub fn write_response(out: []u8, code: CTRL.ResponseCode, data: ?[]const u8) !Message {
+    pub fn new_response(out: []u8, code: CTRL.ResponseCode, data: ?[]const u8) !Message {
         if (out.len < HDR_SIZE) {
             std.log.err("passed out buffer has insufficient size {}\n", .{out.len});
             return error.ResponseWriteErro;

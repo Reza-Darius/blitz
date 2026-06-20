@@ -232,7 +232,7 @@ pub fn process_request(con: *Connection, msg: Message) !void {
     }
 
     const write_slice = con.snd_buf.get_free_slice().?;
-    const resp = try Message.write_response(write_slice, resp_code, resp_data);
+    const resp = try Message.new_response(write_slice, resp_code, resp_data);
     con.snd_buf.written_n(resp.len());
     resp.print_info("response: ");
 

@@ -1,10 +1,46 @@
 # Blitz
 
-A fast in-memory key value store inspired by Redis!
+An easy to use in-memory key value store inspired by Redis!
+
+Currently only supports x86-64 Linux systems.
+
+## Hello World
+
+```bash
+# build from source
+$ git clone "https://github.com/Reza-Darius/blitz" blitz
+$ cd blitz
+$ zig build
+$ cd zig-out/bin
+
+# setup a listening server
+$ ./blitz-cli -s 127.0.0.4:3000
+
+# in another terminal
+$ ./blitz-cli -c 127.0.0.4:3000 set hello 42
+version=.V1, Response: .Ok, paylen=0
+
+$ ./blitz-cli -c 127.0.0.4:3000 get hello
+version=.V1, Response: .Ok, paylen=9, Integer: 42
+```
+
+currently supported operations:
+
+`GET [key]`
+`SET [key] [value]`
+`DEL [key`
+
+keys and values can be one of the following data types:
+
+```
+64 bit signed integer: 42
+boolean: true/false
+64 bit double precision floats: 1.825
+ascii encoded strings: hello
+```
 
 ## Implementation details
 
-- GET, SET, DEL commands for a variety of data types
 - asynchronous event loop based on `epoll()`
 - state machine based request response model
 - use of Zig's compile time reflection for reliable parsing
