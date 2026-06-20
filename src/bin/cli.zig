@@ -227,39 +227,41 @@ const CLI = struct {
     }
 
     fn run_client(self: CLI) !void {
+        var ar = std.heap.ArenaAllocator.init(self.al);
+        defer ar.deinit();
+        const arena = ar.allocator();
+
         var con = try self.addr.?.connect(self.io, .{ .mode = .stream });
         defer con.close(self.io);
 
-        var w_int = con.writer(self.io, &.{});
+        // prepate socket buffer
+        const write_buf = try arena.alloc(u8, MAX_MSG_LEN);
+        var w_int = con.writer(self.io, write_buf);
         var sock_writer = &w_int.interface;
 
-        // form and write request to socket
-        const buf = try self.al.alloc(u8, MAX_MSG_LEN);
-        defer self.al.free(buf);
-        const req = try Message.new_request(buf, self.client_cmd.?, self.key.?, self.value);
+        const read_buf = try arena.alloc(u8, MAX_MSG_LEN);
+        var r_int = con.reader(self.io, read_buf);
+        var socket_reader = &r_int.interface;
 
+        // send request
+        const req_buf = try arena.alloc(u8, MAX_MSG_LEN);
+        const req = try Message.new_request(req_buf, self.client_cmd.?, self.key.?, self.value);
         try sock_writer.writeAll(req.as_slice());
         try sock_writer.flush();
 
         // read header from socket
-        const read_buf = try self.al.alloc(u8, MAX_MSG_LEN);
-        defer self.al.free(read_buf);
-        var r_int = con.reader(self.io, &.{});
-        var socket_reader = &r_int.interface;
-
-        try socket_reader.readSliceAll(read_buf[0..HDR_SIZE]);
-        const hdr = try Message.parse_header(read_buf[0..HDR_SIZE]);
-        try socket_reader.readSliceAll(read_buf[HDR_SIZE .. HDR_SIZE + hdr.pay_len]);
+        const resp_buffer = try arena.alloc(u8, MAX_MSG_LEN);
+        try socket_reader.readSliceAll(resp_buffer[0..HDR_SIZE]);
+        // read rest of response
+        const hdr = try Message.parse_header(resp_buffer[0..HDR_SIZE]);
+        try socket_reader.readSliceAll(resp_buffer[HDR_SIZE .. HDR_SIZE + hdr.pay_len]);
 
         // parse response
-        const resp = try Message.parse(read_buf);
+        const resp = try Message.parse(resp_buffer);
 
         // write response to stdout
         const stdout = std.Io.File.stdout();
-        const stdout_buf = try self.al.alloc(u8, MAX_MSG_LEN);
-        defer self.al.free(stdout_buf);
-
-        var so_r = stdout.writer(self.io, buf);
+        var so_r = stdout.writer(self.io, &.{});
         const stdout_writer = &so_r.interface;
 
         try resp.write(stdout_writer);

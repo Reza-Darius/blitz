@@ -317,7 +317,8 @@ pub const Message = struct {
         return .{ .data = out.ptr };
     }
 
-    pub fn write(self: Message, writer: *std.Io.Writer) !void {
+    /// writes the message to a writer in a human readable format
+   pub fn write(self: Message, writer: *std.Io.Writer) !void {
         const hdr = self.header();
         const pay = self.payload();
 
