@@ -26,9 +26,11 @@ version=.V1, Response: .Ok, paylen=9, Integer: 42
 
 currently supported operations:
 
-`GET [key]`
-`SET [key] [value]`
-`DEL [key`
+`GET [key]`, retrieves a value from the store
+
+`SET [key] [value]`, sets a value inside the store (will overwrite existing entries)
+
+`DEL [key]`, deletes an entry if it exists
 
 keys and values can be one of the following data types:
 
