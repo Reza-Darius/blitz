@@ -37,7 +37,7 @@ test "echo request" {
     }
 }
 
-test "set and get" {
+test "set, get, del" {
     std.testing.log_level = .err;
     const al = std.testing.allocator;
     const io = std.testing.io;

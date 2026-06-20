@@ -26,6 +26,8 @@ pub const DataUnit = union(DataType) {
         Array,
     };
 
+    pub const MAX_STR_LEN = 256;
+
     /// size data type field
     const s_dt = @sizeOf(DataType);
     /// size string length
