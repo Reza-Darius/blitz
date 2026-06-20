@@ -10,17 +10,17 @@ Currently only supports x86-64 Linux systems.
 # build from source
 $ git clone "https://github.com/Reza-Darius/blitz"
 $ cd blitz
-$ zig build
+$ make build
 $ cd zig-out/bin
 
 # setup a listening server
-$ ./blitz-cli -s 127.0.0.4:3000
+$ ./blitz -s 127.0.0.4:3000
 
 # in another terminal
-$ ./blitz-cli -c 127.0.0.4:3000 set hello 42
+$ ./blitz -c 127.0.0.4:3000 set hello 42
 version=.V1, Response: .Ok, paylen=0
 
-$ ./blitz-cli -c 127.0.0.4:3000 get hello
+$ ./blitz -c 127.0.0.4:3000 get hello
 version=.V1, Response: .Ok, paylen=9, Integer: 42
 ```
 

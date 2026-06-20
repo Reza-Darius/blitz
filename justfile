@@ -18,3 +18,6 @@ cdel: build
 
 clean:
   rm -rf .zig-cache
+
+release:
+  zig build -Dtarget=x86_64-linux -Doptimize=ReleaseFast --summary all
