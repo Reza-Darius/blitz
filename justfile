@@ -1,15 +1,20 @@
-SERVER_BIN := "/zig-out/bin/blitz-server"
-CLIENT_BIN := "/zig-out/bin/blitz-client"
+BIN := "/zig-out/bin/blitz-cli"
 SERVER_ADDR := "127.0.0.1:4000"
 
 build:
   zig build
 
 server: build
-  .{{ SERVER_BIN }} {{ SERVER_ADDR }}
+  .{{ BIN }} -s {{ SERVER_ADDR }}
 
-client: build
-  .{{ CLIENT_BIN }} {{ SERVER_ADDR }}
+cset: build
+  .{{ BIN }} -c {{ SERVER_ADDR }} set hello 42
+
+cget: build
+  .{{ BIN }} -c {{ SERVER_ADDR }} get hello
+
+cdel: build
+  .{{ BIN }} -c {{ SERVER_ADDR }} del hello
 
 clean:
   rm -rf .zig-cache

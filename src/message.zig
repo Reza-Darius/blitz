@@ -9,9 +9,8 @@ const MessageError = error{ ParseError, EncodeError, AllocationError, EmptyMessa
 
 /// backing integer of the header
 const HDR_INT = @typeInfo(Header).@"struct".backing_integer.?;
-const HDR_SIZE = hdr_size();
-
-const MAX_MSG_LEN = 512;
+pub const HDR_SIZE = hdr_size();
+pub const MAX_MSG_LEN = 512;
 
 fn hdr_size() comptime_int {
     const bits = @bitSizeOf(HDR_INT);
@@ -123,7 +122,7 @@ pub const Message = struct {
         return .{ .data = data.ptr };
     }
 
-    fn parse_header(data: *[HDR_SIZE]u8) MessageError!Header {
+    pub fn parse_header(data: *[HDR_SIZE]u8) MessageError!Header {
         if (data.len < HDR_SIZE) {
             std.log.err("invalid data size for parsing header", .{});
             return error.HeaderParseError;
@@ -316,6 +315,41 @@ pub const Message = struct {
 
         std.log.debug("nbytes written {}\n", .{n_bytes});
         return .{ .data = out.ptr };
+    }
+
+    pub fn write(self: Message, writer: *std.Io.Writer) !void {
+        const hdr = self.header();
+        const pay = self.payload();
+
+        try writer.print("version={}, ", .{hdr.version});
+
+        switch (hdr.ctrl.msg_type) {
+            .Request => {
+                try writer.print("Request: {}, ", .{hdr.ctrl.data.Request});
+            },
+            .Response => {
+                try writer.print("Response: {}, ", .{hdr.ctrl.data.Response});
+            },
+        }
+        try writer.print("paylen={}, ", .{hdr.pay_len});
+
+        var remaining: u16 = 0;
+
+        while (pay.len - remaining > 0) {
+            const du = DataUnit.decode(pay[remaining..pay.len]) catch unreachable;
+            switch (du) {
+                .String => |*v| try writer.print("String, len = {}: {s}, ", .{ v.s_len, v.data[0..v.s_len] }),
+                .Integer => |v| try writer.print("Integer: {}, ", .{v}),
+                .Float => |v| try writer.print("Float: {}, ", .{v}),
+                .Boolean => |v| try writer.print("Bool: {}, ", .{v}),
+                else => unreachable,
+            }
+
+            remaining += @intCast(du.len());
+        }
+        try writer.print("\n", .{});
+        try writer.flush();
+        return;
     }
 };
 

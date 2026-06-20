@@ -2,7 +2,11 @@ const std = @import("std");
 const blitz = @import("blitz");
 
 const DataUnit = blitz.DataUnit;
+const Message = blitz.Message;
 const eql = std.mem.eql;
+
+const MAX_MSG_LEN = blitz.MAX_MSG_LEN;
+const HDR_SIZE = blitz.HDR_SIZE;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -11,21 +15,20 @@ pub fn main(init: std.process.Init) !void {
 
     const arg_slice = try init.minimal.args.toSlice(arena);
 
-    const cli: CLI = try .parse_args(io, gpa, arg_slice[0..arg_slice.len]);
-    std.Io.unlockStderr(io);
+    const cli: CLI = try .parse_args(io, gpa, arg_slice[1..arg_slice.len]);
     try cli.run();
 }
 
 const CLI = struct {
-    mode: ?Mode,
-    addr: ?std.Io.net.IpAddress,
+    mode: ?Mode = null,
+    addr: ?std.Io.net.IpAddress = null,
 
-    srv_cmds: ?SrvCmd,
-    srv_opts: ?SrvOpts,
+    srv_cmds: ?SrvCmd = null,
+    srv_opts: ?SrvOpts = null,
 
-    client_cmd: ?blitz.CMD,
-    key: ?DataUnit,
-    value: ?DataUnit,
+    client_cmd: ?blitz.CMD = null,
+    key: ?DataUnit = null,
+    value: ?DataUnit = null,
 
     stderr: *std.Io.Writer,
     io: std.Io,
@@ -45,14 +48,15 @@ const CLI = struct {
     };
 
     fn parse_args(io: std.Io, al: std.mem.Allocator, args: []const []const u8) !CLI {
-        var cli: CLI = undefined;
-
         const stderr = try std.Io.lockStderr(io, &.{}, null);
         const stderr_writer = &stderr.file_writer.interface;
+        defer std.Io.unlockStderr(io);
 
-        cli.stderr = stderr_writer;
-        cli.io = io;
-        cli.al = al;
+        var cli: CLI = .{
+            .stderr = stderr_writer,
+            .io = io,
+            .al = al,
+        };
 
         if (args.len == 1) {
             cli.print_help() catch {
@@ -97,7 +101,7 @@ const CLI = struct {
         }
 
         cli.addr = std.Io.net.IpAddress.parseLiteral(args[0]) catch |err| {
-            try cli.stderr.print("invalid ip address {}\n", .{err});
+            try cli.stderr.print("invalid ip address {s} {}\n", .{ args[0], err });
             return error.InvalidIpAddr;
         };
 
@@ -128,7 +132,7 @@ const CLI = struct {
         }
 
         cli.addr = std.Io.net.IpAddress.parseLiteral(args[0]) catch |err| {
-            try cli.stderr.print("invalid ip address {}\n", .{err});
+            try cli.stderr.print("invalid ip address {s} {}\n", .{ args[0], err });
             return error.InvalidIpAddr;
         };
 
@@ -146,7 +150,7 @@ const CLI = struct {
         }
 
         cli.key = parse_datatype(args[2]) catch {
-            try cli.stderr.writeAll("invalid input: invalid data provided\n");
+            try cli.stderr.print("invalid input: invalid data provided {s}\n", .{args[2]});
             return error.InvalidInput;
         };
 
@@ -166,6 +170,10 @@ const CLI = struct {
     }
 
     fn parse_datatype(arg: []const u8) !DataUnit {
+        if (arg.len == 0) {
+            return error.EmptyDataString;
+        }
+
         if (eql(u8, arg, "true")) {
             return .{
                 .Boolean = true,
@@ -174,19 +182,6 @@ const CLI = struct {
             return .{
                 .Boolean = false,
             };
-        }
-
-        if (arg[0] == '"' and arg[arg.len - 1] == '"') {
-            if (arg.len == 2) {
-                return error.EmptyString;
-            }
-
-            if (arg.len - 2 < DataUnit.MAX_STR_LEN) {
-                return .{ .String = .{
-                    .data = arg.ptr + 1,
-                    .s_len = @intCast(arg.len - 2),
-                } };
-            }
         }
 
         if (std.mem.containsAtLeastScalar2(u8, arg, '.', 1)) {
@@ -199,7 +194,10 @@ const CLI = struct {
             return .{ .Integer = v };
         } else |_| {}
 
-        return error.CouldntParseData;
+        return .{ .String = .{
+            .data = arg.ptr,
+            .s_len = @intCast(arg.len),
+        } };
     }
 
     fn print_help(cli: CLI) !void {
@@ -212,10 +210,10 @@ const CLI = struct {
 
         try writer.writeAll("Blitz - fast and convenient key value store\n\n");
         try writer.writeAll("Usage: \n\n");
-        try writer.writeAll("server mode:\n start a blitz server listening on [IpAddress]: -s [IpAddress]\n");
+        try writer.writeAll("server mode:\nstart a blitz server listening on [IpAddress]: -s [IpAddress]\n");
         try writer.writeAll("to run the server in the background, pass: -bg\n");
         try writer.writeAll("to stop a server running in the background run: blitz stop\n\n");
-        try writer.writeAll("client mode:\n to test a server as a client run: -c [IpAddr] [CMD] [Key] [Value]\n");
+        try writer.writeAll("client mode:\nto test a server as a client run: -c [IpAddr] [CMD] [Key] [Value]\n");
 
         try so_r.flush();
         return;
@@ -228,19 +226,56 @@ const CLI = struct {
         }
     }
 
-    fn run_client(_: *const CLI) !void {
+    fn run_client(self: CLI) !void {
+        var con = try self.addr.?.connect(self.io, .{ .mode = .stream });
+        defer con.close(self.io);
+
+        var w_int = con.writer(self.io, &.{});
+        var sock_writer = &w_int.interface;
+
+        // form and write request to socket
+        const buf = try self.al.alloc(u8, MAX_MSG_LEN);
+        defer self.al.free(buf);
+        const req = try Message.new_request(buf, self.client_cmd.?, self.key.?, self.value);
+
+        try sock_writer.writeAll(req.as_slice());
+        try sock_writer.flush();
+
+        // read header from socket
+        const read_buf = try self.al.alloc(u8, MAX_MSG_LEN);
+        defer self.al.free(read_buf);
+        var r_int = con.reader(self.io, &.{});
+        var socket_reader = &r_int.interface;
+
+        try socket_reader.readSliceAll(read_buf[0..HDR_SIZE]);
+        const hdr = try Message.parse_header(read_buf[0..HDR_SIZE]);
+        try socket_reader.readSliceAll(read_buf[HDR_SIZE .. HDR_SIZE + hdr.pay_len]);
+
+        // parse response
+        const resp = try Message.parse(read_buf);
+
+        // write response to stdout
+        const stdout = std.Io.File.stdout();
+        const stdout_buf = try self.al.alloc(u8, MAX_MSG_LEN);
+        defer self.al.free(stdout_buf);
+
+        var so_r = stdout.writer(self.io, buf);
+        const stdout_writer = &so_r.interface;
+
+        try resp.write(stdout_writer);
         return;
     }
 
     fn run_server(cli: *const CLI) !void {
         var srv = try blitz.Server.init(cli.al, cli.addr.?);
+        // TODO: run in the background logic
         try srv.run();
         return;
     }
 };
 
 test "cli parsing" {
-    std.testing.log_level = .err;
+    std.testing.log_level = .debug;
     const io = std.testing.io;
     const al = std.testing.allocator;
 
