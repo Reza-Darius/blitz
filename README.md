@@ -48,5 +48,5 @@ ascii encoded strings: hello
 - use of Zig's compile time reflection for reliable parsing
 - efficient allocation patterns through the use of arenas
 - binary serialization protocol
-- hand rolled hashtable with open addressing with robin hood hashing
+- hand rolled hashtable with open addressing and robin hood hashing
 - zero dependencies
