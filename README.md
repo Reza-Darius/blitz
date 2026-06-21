@@ -2,7 +2,7 @@
 
 An easy to use in-memory key value store inspired by Redis!
 
-Currently only supports x86-64 Linux systems and requires the zig compiler.
+Currently only supports x86-64 Linux systems and requires the zig 0.16 compiler.
 
 ## Hello World
 
@@ -13,7 +13,7 @@ $ cd blitz
 $ make build
 $ cd zig-out/bin
 
-# setup a listening server
+# start a listening server
 $ ./blitz -s 127.0.0.4:3000
 
 # in another terminal
