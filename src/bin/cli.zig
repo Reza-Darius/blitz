@@ -234,7 +234,7 @@ const CLI = struct {
         var con = try self.addr.?.connect(self.io, .{ .mode = .stream });
         defer con.close(self.io);
 
-        // prepate socket buffer
+        // prepare socket buffer
         const write_buf = try arena.alloc(u8, MAX_MSG_LEN);
         var w_int = con.writer(self.io, write_buf);
         var sock_writer = &w_int.interface;

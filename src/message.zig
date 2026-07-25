@@ -22,8 +22,11 @@ fn hdr_size() comptime_int {
 
 // schema in bits: [2b Version][1b MsgType][5b CTRL data][16b pay len][...]
 pub const Header = packed struct(u24) {
-    version: Version = SUPPORTED_VERSION,
+    // the order here is critical: packed structs are ordered from LSB onward
+    // ctrl and version in this order puts [version][ctrl] inside the byte
+    // because of little endian, this maps nicely on the wire as the first byte in the right order
     ctrl: CTRL,
+    version: Version = SUPPORTED_VERSION,
     pay_len: u16 = 0,
 
     pub fn is_ok(self: Header) bool {
@@ -40,8 +43,11 @@ pub const Version = enum(u2) {
 };
 
 pub const CTRL = packed struct(u6) {
-    msg_type: MsgType,
+    // same reason as above, we want msg type to appear first on the wire (reading left to right)
+    // therefore it has on the upper portion of the 6 bits
+    // [msg_type][data]
     data: packed union(u5) { Request: RequestCMD, Response: ResponseCode },
+    msg_type: MsgType,
 
     pub const MsgType = enum(u1) {
         Request,
@@ -116,7 +122,7 @@ pub const Message = struct {
         const hdr = try parse_header(data[0..HDR_SIZE]);
 
         if (hdr.pay_len + HDR_SIZE > data.len) {
-            std.log.err("message incomplete, bytes missing: got={}, expected={}", .{data.len, HDR_SIZE + hdr.pay_len});
+            std.log.err("message incomplete, bytes missing: got={}, expected={}", .{ data.len, HDR_SIZE + hdr.pay_len });
             return error.IncompleteMessage;
         }
         return .{ .data = data.ptr };
@@ -128,8 +134,7 @@ pub const Message = struct {
             return error.HeaderParseError;
         }
 
-        const hdr_int = std.mem.readInt(HDR_INT, data, .big);
-        const hdr: Header = @bitCast(hdr_int);
+        const hdr: Header = @bitCast(std.mem.readInt(HDR_INT, data, .native));
 
         if (hdr.version != SUPPORTED_VERSION) {
             return error.InvalidVersion;
@@ -145,17 +150,13 @@ pub const Message = struct {
     }
 
     fn write_header(out: *[HDR_SIZE]u8, hdr: Header) void {
-        const hi: HDR_INT = @bitCast(hdr);
-        // const le_bytes = std.mem.asBytes(&hi);
-        // std.debug.print("header bytes lil endian: {} {} {}\n", .{ le_bytes[0], le_bytes[1], le_bytes[2] });
-        std.mem.writeInt(HDR_INT, out, hi, .big);
-        // std.debug.print("header bytes big endian: {} {} {}\n", .{ out[0], out[1], out[2] });
+        std.mem.writeInt(HDR_INT, out, @bitCast(hdr), .native);
         return;
     }
 
     /// doesnt do any checks
     pub fn header(self: Message) Header {
-        const hdr_int = std.mem.readInt(HDR_INT, self.data[0..HDR_SIZE], .big);
+        const hdr_int = std.mem.readInt(HDR_INT, self.data[0..HDR_SIZE], .native);
         return @bitCast(hdr_int);
     }
 
@@ -223,15 +224,15 @@ pub const Message = struct {
     }
 
     pub fn as_slice(self: Message) []u8 {
-        const hdr = self.header();
-        return self.data[0 .. HDR_SIZE + hdr.pay_len];
+        return self.data[0 .. self.len()];
     }
 
+    /// returns len of the entire message
     pub fn len(self: Message) u16 {
-        const hdr = self.header();
-        return hdr.pay_len + HDR_SIZE;
+        return self.header().pay_len + HDR_SIZE;
     }
 
+    /// returns slice to the payload
     pub fn payload(self: Message) []u8 {
         const hdr = self.header();
         return self.data[HDR_SIZE .. HDR_SIZE + hdr.pay_len];
@@ -318,7 +319,7 @@ pub const Message = struct {
     }
 
     /// writes the message to a writer in a human readable format
-   pub fn write(self: Message, writer: *std.Io.Writer) !void {
+    pub fn write(self: Message, writer: *std.Io.Writer) !void {
         const hdr = self.header();
         const pay = self.payload();
 
@@ -398,9 +399,22 @@ test "faulty version" {
     try std.testing.expect(res == error.InvalidVersion);
 }
 
-// test "endian memes" {
-//     const buf: []u8 = undefined;
-//     const a: u5 = 2;
-//     std.mem.writePackedInt(u5, buf, 3, a, .native);
-//     std.debug.print("le {b}", .{buf[0]});
-// }
+test "header encoding" {
+    // in-memory representation:
+    // [00][0][000001] [00000101] [00000000]
+    //  V  msg  cmd           pay len
+    var header1: Header = .{ .version = SUPPORTED_VERSION, .ctrl = .{ .msg_type = .Request, .data = .{ .Request = .Set } }, .pay_len = 5 };
+
+    // 1+2^10+2^8, counting the 3 bits set
+    const int: u24 = @bitCast(header1);
+    try std.testing.expect(int == 1281);
+
+    const ptr: *[HDR_SIZE]u8 = @ptrCast(&header1);
+
+    try std.testing.expect(ptr[0] == 1);
+    try std.testing.expect(ptr[1] == 5);
+    try std.testing.expect(ptr[2] == 0);
+
+    const header2: Header = @bitCast(std.mem.readInt(HDR_INT, ptr, .native));
+    try std.testing.expect(header2 == header1);
+}
