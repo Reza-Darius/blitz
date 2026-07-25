@@ -27,7 +27,7 @@ pub const HashMap = struct {
     const LOAD_THRESH = 0.9;
 
     const Bucket = struct {
-        /// probe sequence length
+        /// probe sequence length. Determines how far a value is from its ideal position
         psl: u8 = 0,
         /// 64 bit integer
         hash: Hash = 0,
@@ -89,7 +89,7 @@ pub const HashMap = struct {
     }
 
     fn insert_helper(self: *HashMap, new: *Entry) ?*Entry {
-        const c = self.data.len;
+        const cap = self.data.len;
 
         var cur_bucket: Bucket = .{
             .psl = 0,
@@ -99,7 +99,7 @@ pub const HashMap = struct {
 
         debug("inserting entry\n", .{});
 
-        var i: u32 = index(c, cur_bucket.hash);
+        var i: u32 = index(cap, cur_bucket.hash);
         var old: ?*Entry = null;
 
         while (self.data[i].entry != null) {
@@ -121,7 +121,7 @@ pub const HashMap = struct {
                 debug("checking for {any} now", .{cur_bucket});
             }
 
-            i = index(c, i + 1);
+            i = index(cap, i + 1);
             cur_bucket.psl += 1;
         }
 
@@ -136,11 +136,11 @@ pub const HashMap = struct {
         std.debug.assert(key.len != 0);
         std.log.debug("retrieving key from map\n", .{});
 
-        const c = self.data.len;
+        const cap = self.data.len;
         const cur_hash = hash(key);
 
         var psl: u8 = 0;
-        var i: u32 = index(c, cur_hash);
+        var i: u32 = index(cap, cur_hash);
 
         while (self.data[i].entry != null) {
             if (psl > self.data[i].psl) {
@@ -150,7 +150,7 @@ pub const HashMap = struct {
                 std.log.debug("found key!\n", .{});
                 return self.data[i].entry;
             }
-            i = index(c, i + 1);
+            i = index(cap, i + 1);
             psl += 1;
         }
 
@@ -162,10 +162,10 @@ pub const HashMap = struct {
     pub fn remove(self: *HashMap, key: []const u8) ?*Entry {
         std.debug.assert(key.len != 0);
 
-        const c = self.data.len;
+        const cap = self.data.len;
 
         const h = hash(key);
-        var i = index(c, h);
+        var i = index(cap, h);
         var psl: u8 = 0;
 
         var r: ?*Entry = null;
@@ -179,7 +179,7 @@ pub const HashMap = struct {
                 self.data[i].entry = null;
                 break;
             }
-            i = index(c, i + 1);
+            i = index(cap, i + 1); // this ensures proper wraparound
             psl += 1;
         }
 
@@ -190,20 +190,20 @@ pub const HashMap = struct {
 
         debug("removing {s} at {}\n", .{ r.?.get_key(), i });
 
-        var j: u32 = index(c, i + 1);
+        var j: u32 = index(cap, i + 1);
         while (self.data[j].entry != null) {
             debug("checking neighbor at {any}\n", .{j});
             if (self.data[j].psl > 0) {
                 self.data[j].psl -= 1;
                 debug("swapping with neighbor {any} at {any}\n", .{ self.data[j], j });
 
-                const dest = index(c, j + c - 1);
+                const dest = index(cap, j + cap - 1);
 
                 std.mem.swap(Bucket, &self.data[j], &self.data[dest]);
             } else {
                 break;
             }
-            j = index(c, j + 1);
+            j = index(cap, j + 1);
         }
         debug("returning {any}\n", .{r});
 
@@ -251,10 +251,10 @@ pub const HashMap = struct {
         return self.len == 0;
     }
 
-    inline fn index(c: usize, x: u64) u32 {
+    inline fn index(cap: usize, h: u64) u32 {
         // only power of two capacity values are permitted to enable faster modulo
-        std.debug.assert((c & (c - 1)) == 0);
-        return @intCast(x & (c - 1));
+        std.debug.assert((cap & (cap - 1)) == 0);
+        return @intCast(h & (cap - 1));
     }
 };
 
